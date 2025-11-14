@@ -1,0 +1,130 @@
+#define THRESHOLD 50
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+int SPEED = 60;
+
+task main()
+{
+    // Set light sensor in active mode
+    SetSensorLight(IN_3, true);
+
+    // Assume initial rotation direction: true = clockwise
+    bool dirCW = true;
+
+    // Start moving forward
+    OnFwd(BOTH, SPEED);
+    int dir = -1;
+
+    while (true)
+    {
+        int lightValue = Sensor(IN_3);
+
+        // Display light value on LCD
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+        Wait(10);
+
+
+        // If light exceeds threshold, search for dark area
+        while (lightValue > THRESHOLD)
+        {
+            int searchTime = 100; // initial sweep duration
+
+            // Sweep until dark area found
+            while (lightValue > THRESHOLD)
+            {
+                OnFwd(RIGHT, (SPEED / 2) * dir * -1);
+                OnFwd(LEFT, (SPEED / 2) * dir);
+
+                Wait(searchTime);
+                Off(BOTH); // stop to read sensor
+                lightValue = Sensor(IN_3);
+
+                if (lightValue <= THRESHOLD) {
+                    OnFwd(BOTH, SPEED); // dark area found, move forward
+                    break;
+                }
+
+                // Switch sweep direction
+                dir = -dir;
+
+                // Gradually increase sweep range
+                searchTime += 50;
+            }
+        }
+
+        // Optional: update rotation direction based on motion pattern
+        // For example, if LEFT motor is always faster than RIGHT, it's CW
+        // Here we just leave it static unless you implement an odometry check
+    }
+}
+
+// ================================ BIN =============================
+#define THRESHOLD 32
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+
+int SPEED = 80;
+int SEARCHING_SPEED = 40;
+
+// black threadshod < 22
+// blue threashold < 30
+
+
+task main()
+{
+    // Set light sensor in active mode
+    SetSensorLight(IN_3, false);
+
+    // Start moving forward
+    OnFwd(BOTH, SPEED);
+    int dir = -1;
+
+    while (true)
+    {
+
+        int lightValue = Sensor(IN_3);
+
+        // If light exceeds threshold, search for dark area
+
+            int searchTime = 0; // initial sweep duration
+
+            // Sweep until dark area found
+            while (lightValue > THRESHOLD)
+            {
+                OnFwd(RIGHT, (SEARCHING_SPEED) * dir * -1);
+                OnFwd(LEFT, (SEARCHING_SPEED) * dir);
+                Wait(searchTime);
+
+                for (int i = 0 ; i<5 ; i++) {
+                    Wait(10);
+                    Off(BOTH); // stop to read sensor
+                    lightValue = Sensor(IN_3);
+                    OnFwd(RIGHT, (SEARCHING_SPEED) * dir * -1);
+                    OnFwd(LEFT, (SEARCHING_SPEED) * dir);
+
+                    if (lightValue <= THRESHOLD) {
+                     OnFwd(BOTH, SPEED); // dark area found, move forward
+                     break;
+                    }
+                }
+
+                // Switch sweep direction
+                dir = -dir;
+
+                // Gradually increase sweep range
+                searchTime += 50;
+
+            }
+            // Display light value on LCD
+            ClearScreen();
+            TextOut(0, LCD_LINE1, "Light:");
+            NumOut(50, LCD_LINE1, lightValue);
+            Wait(1);
+    }
+}
+
+

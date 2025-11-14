@@ -1,0 +1,233 @@
+------------- just move a bit ------------------
+task main()
+{
+  for(int x = 10; x <= 100; x+=10){
+    OnFwd(OUT_AC, x);
+    Wait(1000);
+    OnRev(OUT_AC, x);
+    Wait(1000);
+  }
+  Off(OUT_AC);
+}
+
+-----------------------------------------------
+עובד יפה אבל איטי:
+
+#define THRESHOLD 50
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+int SPEED = 30;
+
+task main()
+{
+    // Set light sensor in active mode
+    SetSensorLight(IN_3, true);
+
+    // Start moving forward
+    OnFwd(BOTH, SPEED);
+
+    while (true)
+    {
+        int lightValue = Sensor(IN_3);
+
+        // Display light value on LCD
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+        Wait(50);
+
+        // If light exceeds threshold, search for dark area
+        while (lightValue > THRESHOLD)
+        {
+            int dir = -1;        // start searching left
+            int searchTime = 100; // initial sweep duration in ms
+
+            // Sweep left and right until dark area found
+            while (lightValue > THRESHOLD)
+            {
+                if (dir == -1) {
+                    OnRev(LEFT, SPEED);  // turn left
+                    OnFwd(RIGHT, SPEED);
+                } else {
+                    OnRev(RIGHT, SPEED); // turn right
+                    OnFwd(LEFT, SPEED);
+                }
+
+                Wait(searchTime);
+                Off(BOTH); // stop to read sensor
+                lightValue = Sensor(IN_3);
+
+                if (lightValue <= THRESHOLD) {
+                    OnFwd(BOTH, SPEED); // dark area found, move forward
+                    break;
+                }
+
+                // Switch direction for next sweep
+                dir = -dir;
+
+                // Increase sweep duration slightly for next iteration
+                searchTime += 50;
+            }
+        }
+    }
+}
+---------------------------------------------------------------------
+#define THRESHOLD 50
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+int SPEED = 60;
+
+task main()
+{
+    // Set light sensor in active mode
+    SetSensorLight(IN_3, true);
+
+    // Assume initial rotation direction: true = clockwise
+    bool dirCW = true;
+
+    // Start moving forward
+    OnFwd(BOTH, SPEED);
+    int dir = -1;
+
+    while (true)
+    {
+        int lightValue = Sensor(IN_3);
+
+        // Display light value on LCD
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+        Wait(10);
+
+
+        // If light exceeds threshold, search for dark area
+        while (lightValue > THRESHOLD)
+        {
+            int searchTime = 100; // initial sweep duration
+
+            // Sweep until dark area found
+            while (lightValue > THRESHOLD)
+            {
+                OnFwd(RIGHT, (SPEED / 2) * dir * -1);
+                OnFwd(LEFT, (SPEED / 2) * dir);
+
+                Wait(searchTime);
+                Off(BOTH); // stop to read sensor
+                lightValue = Sensor(IN_3);
+
+                if (lightValue <= THRESHOLD) {
+                    OnFwd(BOTH, SPEED); // dark area found, move forward
+                    break;
+                }
+
+                // Switch sweep direction
+                dir = -dir;
+
+                // Gradually increase sweep range
+                searchTime += 50;
+            }
+        }
+
+        // Optional: update rotation direction based on motion pattern
+        // For example, if LEFT motor is always faster than RIGHT, it's CW
+        // Here we just leave it static unless you implement an odometry check
+    }
+}
+
+
+
+
+
+
+
+
+
+=============== adaptove speed ====================
+// ================================ GUY =============================
+#define THRESHOLD 30
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+
+int SPEED = 0;
+int MIN_SPEED = 20;
+int MAX_SPEED = 100;
+
+task main()
+{
+    SetSensorLight(IN_3, false);
+    SetSensor(IN_1, SENSOR_TOUCH);
+
+    int dir = 1;
+
+    while(SENSOR_1 != 1)
+    {
+        int lightValue = Sensor(IN_3);
+        int searchTime = 10;
+
+        // Correct adaptive speed formula
+        SPEED = MIN_SPEED + ((MAX_SPEED - MIN_SPEED) * (100 - lightValue)) / 100;
+
+        // clamp
+        if (SPEED > 100) SPEED = 100;
+        if (SPEED < 0)   SPEED = 0;
+
+        OnFwd(BOTH, SPEED);
+
+        // Sweep until dark area found
+        while (lightValue > THRESHOLD && SENSOR_1 != 1)
+        {
+            OnFwd(RIGHT, SPEED * dir * -1);
+            OnFwd(LEFT,  SPEED * dir);
+
+            for (int i = 0 ; i < searchTime/2 && SENSOR_1 != 1 ; i++)
+            {
+                Wait(1);
+                lightValue = Sensor(IN_3);
+
+                SPEED = MIN_SPEED + ((MAX_SPEED - MIN_SPEED) * (100 - lightValue)) / 100;
+
+                if (SPEED > 100) SPEED = 100;
+                if (SPEED < 0)   SPEED = 0;
+
+                if (lightValue <= THRESHOLD)
+                {
+                    OnFwd(BOTH, SPEED);
+                    dir *= -1;
+                    break;
+                }
+            }
+
+            dir = -dir;
+            searchTime *= 2;
+        }
+
+        // LCD OUTPUT
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+        Wait(1);
+    }
+
+    Off(BOTH);
+}
+
+
+==============
+task main()
+{
+    SetSensorLight(IN_3, false);
+
+    while (true)
+    {
+        int lightValue = Sensor(IN_3);
+
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+
+        Wait(100); // small delay
+    }
+}

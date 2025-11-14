@@ -1,0 +1,95 @@
+// ======================= PID LINE FOLLOWER (OPTIMIZED) =======================
+#define LEFT      OUT_C
+#define RIGHT     OUT_A
+#define BOTH      OUT_AC
+
+#define LIGHT     IN_3
+#define TOUCH     IN_1
+
+// PID parameters (tune these)
+
+// Kp — Proportional gain
+// • Main steering power; reacts to current error
+// • Higher = stronger, faster corrections
+// • Too high = wobbling / oscillation
+// • Typical usable range for NXT: 0.5 to 4.0   (max ~6 for very fast robots)
+float Kp = 2.0;
+
+// Ki — Integral gain
+// • Fixes long-term drift or bias (e.g., one motor weaker)
+// • Usually kept LOW because NXT sensor noise can cause instability
+// • Typical usable range: 0.0 to 0.5   (most robots use 0.0)
+float Ki = 0.0;
+
+// Kd — Derivative gain
+// • Dampens oscillations by reacting to the CHANGE in error
+// • Higher = smoother, more stable turning
+// • Too high = sluggish response or jitter
+// • Typical usable range: 0.5 to 3.5   (rarely above 4)
+float Kd = 2.0;
+
+
+// Base driving speed
+int BASE_SPEED = 90;
+
+// Calibration values
+int BLACK = 30;   // Dark value (your threshold)
+int WHITE = 60;   // Bright floor value — adjust after testing
+int TARGET;       // Mid-point target
+
+task main()
+{
+    // Enable sensors
+    SetSensorLight(LIGHT, true);
+    SetSensor(TOUCH, SENSOR_TOUCH);
+
+    // Calculate desired brightness setpoint
+    TARGET = (BLACK + WHITE) / 2;
+
+    // PID variables
+    float error = 0;
+    float lastError = 0;
+    float integral = 0;
+    float derivative = 0;
+    float correction = 0;
+
+    while (SENSOR_1 != 1)   // stop when touch sensor pressed
+    {
+        int lightValue = Sensor(LIGHT);
+
+        // === PID MATH ===
+        error = TARGET - lightValue;
+        integral += error;
+        derivative = error - lastError;
+
+        correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+        lastError = error;
+
+        // Motor speeds
+        int leftSpeed  = BASE_SPEED + correction;
+        int rightSpeed = BASE_SPEED - correction;
+
+        // Clamp to valid range
+        if (leftSpeed > 100)  leftSpeed = 100;
+        if (leftSpeed < -100) leftSpeed = -100;
+
+        if (rightSpeed > 100)  rightSpeed = 100;
+        if (rightSpeed < -100) rightSpeed = -100;
+
+        // Drive the motors
+        OnFwd(LEFT,  leftSpeed);
+        OnFwd(RIGHT, rightSpeed);
+
+        // Output sensor for debugging
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+
+        TextOut(0, LCD_LINE2, "Err:");
+        NumOut(50, LCD_LINE2, error);
+
+        Wait(10); // small PID loop delay
+    }
+
+    Off(BOTH);
+}

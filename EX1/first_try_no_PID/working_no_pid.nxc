@@ -1,0 +1,62 @@
+/*
+זה מה שעבדנו עליו רוב הזמן, שפיתחנו לרוב לבד
+*/
+
+#define THRESHOLD 50
+#define LEFT OUT_C
+#define RIGHT OUT_A
+#define BOTH OUT_AC
+
+int SPEED = 85;
+int SEARCHING_SPEED = 40;
+
+task main()
+{
+    // Set light sensor in active mode
+    SetSensorLight(IN_3, true);
+    SetSensor(IN_1, SENSOR_TOUCH);
+
+    // Start moving forward
+    OnFwd(BOTH, SPEED);
+    int dir = 1;
+
+    while (SENSOR_1 != 1)
+    {
+        int lightValue = Sensor(IN_3);
+        int searchTime = 10; // initial sweep duration
+
+        // Sweep until dark area found
+        while (lightValue > THRESHOLD && SENSOR_1 != 1)
+        {
+            OnFwd(RIGHT, SEARCHING_SPEED * dir * -1);
+            OnFwd(LEFT,  SEARCHING_SPEED * dir);
+
+            for (int i = 0; i < searchTime / 2 && SENSOR_1 != 1; i++)
+            {
+                Wait(1);
+                lightValue = Sensor(IN_3);
+
+                if (lightValue <= THRESHOLD)
+                {
+                    OnFwd(BOTH, SPEED); // dark area found, move forward
+                    dir *= -1;
+                    break;
+                }
+            }
+
+            // Switch sweep direction
+            dir = -dir;
+
+            // Gradually increase sweep range
+            searchTime *= 2;
+        }
+
+        // Display light value on LCD
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Light:");
+        NumOut(50, LCD_LINE1, lightValue);
+        Wait(1);
+    }
+
+    Off(BOTH);
+}

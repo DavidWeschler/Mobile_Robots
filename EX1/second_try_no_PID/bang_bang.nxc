@@ -1,0 +1,48 @@
+#define LEFT      OUT_C
+#define RIGHT     OUT_A
+#define BOTH      OUT_AC
+
+#define LIGHT     IN_3
+#define TOUCH     IN_1
+
+// Base driving speed
+int BASE_SPEED = 90;
+
+// Calibration values
+int BLACK = 30;   // Dark value (line)
+int WHITE = 60;   // Light value (floor)
+int THRESHOLD;    // Midpoint threshold
+
+task main()
+{
+    // Enable sensors
+    SetSensorLight(LIGHT, true);
+    SetSensor(TOUCH, SENSOR_TOUCH);
+
+    // Calculate threshold between black and white
+    THRESHOLD = (BLACK + WHITE) / 2;
+
+    while (Sensor(TOUCH) != 1)  // Run until touch sensor pressed
+    {
+        int lightValue = Sensor(LIGHT);
+
+        if (lightValue < THRESHOLD)
+        {
+            // On the line - turn left
+            OnFwd(LEFT, BASE_SPEED / 2);
+            OnFwd(RIGHT, BASE_SPEED);
+        }
+        else
+        {
+            // Off the line - turn right
+            OnFwd(LEFT, BASE_SPEED);
+            OnFwd(RIGHT, BASE_SPEED / 2);
+        }
+
+        // Optional: Small delay to reduce sensor noise
+        Wait(10);
+    }
+
+    // Stop motors when touch sensor pressed
+    Off(BOTH);
+}

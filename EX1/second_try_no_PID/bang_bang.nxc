@@ -6,7 +6,7 @@
 #define TOUCH     IN_1
 
 // Base driving speed
-int BASE_SPEED = 90;
+int BASE_SPEED = 100;
 
 // Calibration values
 int BLACK = 30;   // Dark value (line)
@@ -29,14 +29,14 @@ task main()
         if (lightValue < THRESHOLD)
         {
             // On the line - turn left
-            OnFwd(LEFT, BASE_SPEED / 2);
+            OnFwd(LEFT, BASE_SPEED / 2.1);
             OnFwd(RIGHT, BASE_SPEED);
         }
         else
         {
             // Off the line - turn right
             OnFwd(LEFT, BASE_SPEED);
-            OnFwd(RIGHT, BASE_SPEED / 2);
+            OnFwd(RIGHT, BASE_SPEED / 2.1);
         }
 
         // Optional: Small delay to reduce sensor noise

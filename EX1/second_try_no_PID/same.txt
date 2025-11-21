@@ -1,0 +1,139 @@
+/*
+זה ההתחלה של חישוב אודומטריה, כרגע לא מתקמפל
+*/
+
+#define LEFT      OUT_C
+#define RIGHT     OUT_A
+#define BOTH      OUT_AC
+
+#define LIGHT     IN_3
+#define TOUCH     IN_1
+
+const int BASE_SPEED = 90;
+const int BLACK = 30;
+const int WHITE = 60;
+int THRESHOLD;
+
+const float WHEEL_DIAMETER = 5.6;  // cm
+const float WHEEL_CIRCUMFERENCE = 3.14 * WHEEL_DIAMETER;  // cm
+const float WHEEL_BASE = 12.0;  // cm
+
+float x = 0.0;
+float y = 0.0;
+float theta = 0.0;
+
+int lastLeftTacho = 0;
+int lastRightTacho = 0;
+
+int fileHandle;
+#define FILE_NAME "ROUTE.TXT"
+
+void SavePosition(float xPos, float yPos, float angle)
+{
+    char buffer[50];
+    char numStr[12]; // buffer for number strings
+
+    long xmm = xPos * 100;
+    long ymm = yPos * 100;
+    long thetam = angle * 1000;
+
+    // Clear buffer
+    buffer[0] = '\0';
+
+    // Convert xmm to string and append
+    NumToStr(numStr, xmm);
+    StrCat(buffer, numStr);
+
+    // Append comma
+    StrCat(buffer, ",");
+
+    // Convert ymm to string and append
+    NumToStr(numStr, ymm);
+    StrCat(buffer, numStr);
+
+    // Append comma
+    StrCat(buffer, ",");
+
+    // Convert thetam to string and append
+    NumToStr(numStr, thetam);
+    StrCat(buffer, numStr);
+
+    // Append newline
+    StrCat(buffer, "\n");
+
+    FileWrite(fileHandle, buffer, StrLen(buffer));
+}
+
+
+task main()
+{
+    SetSensorLight(LIGHT, true);
+    SetSensor(TOUCH, SENSOR_TOUCH);
+
+    THRESHOLD = (BLACK + WHITE) / 2;
+
+    lastLeftTacho = MotorTachoCount(LEFT);
+    lastRightTacho = MotorTachoCount(RIGHT);
+
+    fileHandle = FileOpen(FILE_NAME, FILE_WRITE);
+    if (fileHandle < 0)
+    {
+        TextOut(0, LCD_LINE1, "File error!");
+        Wait(3000);
+        return;
+    }
+
+    while (Sensor(TOUCH) != 1)
+    {
+        int lightValue = Sensor(LIGHT);
+
+        if (lightValue < THRESHOLD)
+        {
+            OnFwd(LEFT, BASE_SPEED / 2);
+            OnFwd(RIGHT, BASE_SPEED);
+        }
+        else
+        {
+            OnFwd(LEFT, BASE_SPEED);
+            OnFwd(RIGHT, BASE_SPEED / 2);
+        }
+
+        int currentLeftTacho = MotorTachoCount(LEFT);
+        int currentRightTacho = MotorTachoCount(RIGHT);
+
+        int deltaLeftTacho = currentLeftTacho - lastLeftTacho;
+        int deltaRightTacho = currentRightTacho - lastRightTacho;
+
+        lastLeftTacho = currentLeftTacho;
+        lastRightTacho = currentRightTacho;
+
+        float distLeft = (deltaLeftTacho / 360.0) * WHEEL_CIRCUMFERENCE;
+        float distRight = (deltaRightTacho / 360.0) * WHEEL_CIRCUMFERENCE;
+
+        float distCenter = (distLeft + distRight) / 2.0;
+        float deltaTheta = (distRight - distLeft) / WHEEL_BASE;
+
+        theta += deltaTheta;
+
+        if (theta > 3.14159) theta -= 2 * 3.14159;
+        if (theta < -3.14159) theta += 2 * 3.14159;
+
+        x += distCenter * cos(theta);
+        y += distCenter * sin(theta);
+
+        //SavePosition(x, y, theta);
+
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "X:");
+        NumOut(20, LCD_LINE1, x * 100);   // implicit float to int
+        TextOut(0, LCD_LINE2, "Y:");
+        NumOut(20, LCD_LINE2, y * 100);
+        TextOut(0, LCD_LINE3, "Theta:");
+        NumOut(40, LCD_LINE3, theta * 1000);
+
+        Wait(50);
+    }
+
+    FileClose(fileHandle);
+    Off(BOTH);
+}

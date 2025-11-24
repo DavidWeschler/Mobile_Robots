@@ -54,8 +54,9 @@ void WriteLogToFile()
 
         string str = "rows: ";
         str = StrCat(str, NumToStr(data_index));
+        str = StrCat(str, "\n");
         unsigned int bytesWritten1 = 0;
-        WriteString(fileHandle, str + "\n", bytesWritten1);
+        WriteString(fileHandle, str, bytesWritten1);
 
 
         for(int i=0; i < data_index; i++) {
@@ -96,13 +97,7 @@ task main()
     lastLeftTacho = 0;
     lastRightTacho = 0;
 
-    // 3. Ready Check
-    TextOut(0, LCD_LINE1, "READY.");
-    TextOut(0, LCD_LINE2, "PRESS TOUCH");
-    while(Sensor(TOUCH) != 1);
-    while(Sensor(TOUCH) == 1); // Wait for release
-    ClearScreen();
-    TextOut(0, LCD_LINE1, "RUNNING...");
+
 
     long last_log_time = CurrentTick();
 
@@ -111,11 +106,11 @@ task main()
     {
         // --- A. LINE FOLLOWING ---
         if (Sensor(LIGHT) < THRESHOLD) {
-            OnFwd(LEFT, BASE_SPEED * 0.4);
+            OnFwd(LEFT, BASE_SPEED /1.5);
             OnFwd(RIGHT, BASE_SPEED);
         } else {
             OnFwd(LEFT, BASE_SPEED);
-            OnFwd(RIGHT, BASE_SPEED * 0.4);
+            OnFwd(RIGHT, BASE_SPEED / 1.5);
         }
 
         // --- B. EXACT ARC ODOMETRY ---
@@ -145,7 +140,7 @@ task main()
             // This prevents "Divide by Zero" errors.
             float midTheta = theta + (deltaTheta / 2.0);
             float t_theta =  midTheta * RAD_TO_DEG;
-            
+
             x += (deltaDist * Cos(t_theta));
             y += (deltaDist * Sin(t_theta));
             theta += deltaTheta;
@@ -156,10 +151,10 @@ task main()
             float radius = deltaDist / deltaTheta;
             float oldTheta = theta;
             float newTheta = theta + deltaTheta;
-            
+
             float t_theta_new =  newTheta * RAD_TO_DEG;
             float t_theta_old =  oldTheta * RAD_TO_DEG;
-            
+
             // x_new = x_old + R * (sin(theta_new) - sin(theta_old))
             x += (radius * (Sin(t_theta_new) - Sin(t_theta_old)));
 

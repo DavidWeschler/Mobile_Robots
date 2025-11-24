@@ -1,4 +1,3 @@
-// ======================= PID LINE FOLLOWER (OPTIMIZED) =======================
 #define LEFT      OUT_C
 #define RIGHT     OUT_A
 #define BOTH      OUT_AC

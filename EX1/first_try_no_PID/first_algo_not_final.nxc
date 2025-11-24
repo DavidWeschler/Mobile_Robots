@@ -1,7 +1,3 @@
-/*
-זה מה שעבדנו עליו רוב הזמן, שפיתחנו לרוב לבד
-*/
-
 #define THRESHOLD 50
 #define LEFT OUT_C
 #define RIGHT OUT_A

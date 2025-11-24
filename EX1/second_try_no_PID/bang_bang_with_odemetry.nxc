@@ -1,139 +1,199 @@
-/*
-זה ההתחלה של חישוב אודומטריה, כרגע לא מתקמפל
-*/
+#include "NXCDefs.h"
 
+// --- PORTS ---
 #define LEFT      OUT_C
 #define RIGHT     OUT_A
 #define BOTH      OUT_AC
-
 #define LIGHT     IN_3
 #define TOUCH     IN_1
+#define FILE_NAME "ROUTE.TXT"
 
-const int BASE_SPEED = 90;
-const int BLACK = 30;
+#ifndef SENSOR_TOUCH
+#define SENSOR_TOUCH 0
+#endif
+
+// --- ROBOT CONSTANTS ---
+const int BASE_SPEED = 60;
+const int BLACK = 35;
 const int WHITE = 60;
 int THRESHOLD;
 
-const float WHEEL_DIAMETER = 5.6;  // cm
-const float WHEEL_CIRCUMFERENCE = 3.14 * WHEEL_DIAMETER;  // cm
-const float WHEEL_BASE = 12.0;  // cm
+// MEASURE THESE CAREFULLY!
+const float WHEEL_DIAMETER = 5.6;
+const float WHEEL_CIRCUMFERENCE = 17.5929; // pi * 5.6
+const float WHEEL_BASE = 12.0;             // Distance between center of wheels
 
+const float RAD_TO_DEG = 57.29578;
+const float DEG_TO_RAD = 0.017453;
+
+// --- LOGGING (RAM) ---
+// NXT Flash is slow. We save to RAM first, then file later.
+#define MAX_POINTS 1500
+float logX[MAX_POINTS];
+float logY[MAX_POINTS];
+float logTheta[MAX_POINTS];
+int data_index = 0;
+
+// --- ODOMETRY VARIABLES ---
 float x = 0.0;
 float y = 0.0;
-float theta = 0.0;
+float theta = 0.0; // Radians
 
-int lastLeftTacho = 0;
-int lastRightTacho = 0;
+float lastLeftTacho = 0;
+float lastRightTacho = 0;
 
-int fileHandle;
-#define FILE_NAME "ROUTE.TXT"
+byte fileHandle;
 
-void SavePosition(float xPos, float yPos, float angle)
+// --- FUNCTION TO SAVE DATA ---
+void WriteLogToFile()
 {
-    char buffer[50];
-    char numStr[12]; // buffer for number strings
+    DeleteFile(FILE_NAME);
+    if (CreateFile(FILE_NAME, 5120, fileHandle) == LDR_SUCCESS)
+    {
+        TextOut(0, LCD_LINE1, "SAVING DATA...");
 
-    long xmm = xPos * 100;
-    long ymm = yPos * 100;
-    long thetam = angle * 1000;
+        string str = "rows: ";
+        str = StrCat(str, NumToStr(data_index));
+        unsigned int bytesWritten1 = 0;
+        WriteString(fileHandle, str + "\n", bytesWritten1);
 
-    // Clear buffer
-    buffer[0] = '\0';
 
-    // Convert xmm to string and append
-    NumToStr(numStr, xmm);
-    StrCat(buffer, numStr);
+        for(int i=0; i < data_index; i++) {
+            // Convert floats to integers for storage (avoids scientific notation issues in NXC)
+            long x_out = logX[i] * 10000;
+            long y_out = logY[i] * 10000;
+            long t_out = logTheta[i] * 100000;
 
-    // Append comma
-    StrCat(buffer, ",");
+            string s = NumToStr(x_out);
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(y_out));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(t_out));
+            s = StrCat(s, "\n");
 
-    // Convert ymm to string and append
-    NumToStr(numStr, ymm);
-    StrCat(buffer, numStr);
-
-    // Append comma
-    StrCat(buffer, ",");
-
-    // Convert thetam to string and append
-    NumToStr(numStr, thetam);
-    StrCat(buffer, numStr);
-
-    // Append newline
-    StrCat(buffer, "\n");
-
-    FileWrite(fileHandle, buffer, StrLen(buffer));
+            unsigned int bytesWritten = 0;
+            WriteString(fileHandle, s, bytesWritten);
+        }
+        CloseFile(fileHandle);
+        PlaySound(SOUND_UP);
+    }
+    else {
+        TextOut(0, LCD_LINE1, "SAVE ERROR!");
+        PlaySound(SOUND_LOW_BEEP);
+    }
 }
-
 
 task main()
 {
+    // 1. Setup Sensors
     SetSensorLight(LIGHT, true);
     SetSensor(TOUCH, SENSOR_TOUCH);
-
     THRESHOLD = (BLACK + WHITE) / 2;
 
-    lastLeftTacho = MotorTachoCount(LEFT);
-    lastRightTacho = MotorTachoCount(RIGHT);
+    // 2. Reset Hardware Counters (CRITICAL FOR PRECISION)
+    ResetTachoCount(BOTH);
+    Wait(100);
+    lastLeftTacho = 0;
+    lastRightTacho = 0;
 
-    fileHandle = FileOpen(FILE_NAME, FILE_WRITE);
-    if (fileHandle < 0)
-    {
-        TextOut(0, LCD_LINE1, "File error!");
-        Wait(3000);
-        return;
-    }
+    // 3. Ready Check
+    TextOut(0, LCD_LINE1, "READY.");
+    TextOut(0, LCD_LINE2, "PRESS TOUCH");
+    while(Sensor(TOUCH) != 1);
+    while(Sensor(TOUCH) == 1); // Wait for release
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "RUNNING...");
 
+    long last_log_time = CurrentTick();
+
+    // 4. Main Loop
     while (Sensor(TOUCH) != 1)
     {
-        int lightValue = Sensor(LIGHT);
-
-        if (lightValue < THRESHOLD)
-        {
-            OnFwd(LEFT, BASE_SPEED / 2);
+        // --- A. LINE FOLLOWING ---
+        if (Sensor(LIGHT) < THRESHOLD) {
+            OnFwd(LEFT, BASE_SPEED * 0.4);
             OnFwd(RIGHT, BASE_SPEED);
-        }
-        else
-        {
+        } else {
             OnFwd(LEFT, BASE_SPEED);
-            OnFwd(RIGHT, BASE_SPEED / 2);
+            OnFwd(RIGHT, BASE_SPEED * 0.4);
         }
 
-        int currentLeftTacho = MotorTachoCount(LEFT);
-        int currentRightTacho = MotorTachoCount(RIGHT);
+        // --- B. EXACT ARC ODOMETRY ---
 
-        int deltaLeftTacho = currentLeftTacho - lastLeftTacho;
-        int deltaRightTacho = currentRightTacho - lastRightTacho;
+        // 1. Read Motors
+        float currentLeft = MotorTachoCount(LEFT);
+        float currentRight = MotorTachoCount(RIGHT);
 
-        lastLeftTacho = currentLeftTacho;
-        lastRightTacho = currentRightTacho;
+        float deltaLeft = currentLeft - lastLeftTacho;
+        float deltaRight = currentRight - lastRightTacho;
 
-        float distLeft = (deltaLeftTacho / 360.0) * WHEEL_CIRCUMFERENCE;
-        float distRight = (deltaRightTacho / 360.0) * WHEEL_CIRCUMFERENCE;
+        lastLeftTacho = currentLeft;
+        lastRightTacho = currentRight;
 
-        float distCenter = (distLeft + distRight) / 2.0;
-        float deltaTheta = (distRight - distLeft) / WHEEL_BASE;
+        // 2. Convert Degrees of Rotation to Distance (cm)
+        float distLeft = (deltaLeft / 360.0) * WHEEL_CIRCUMFERENCE;
+        float distRight = (deltaRight / 360.0) * WHEEL_CIRCUMFERENCE;
 
-        theta += deltaTheta;
+        // 3. Calculate Path Variables
+        float deltaDist = (distLeft + distRight) / 2.0;
+        float deltaTheta = (distRight - distLeft) / WHEEL_BASE; // Radians
 
-        if (theta > 3.14159) theta -= 2 * 3.14159;
-        if (theta < -3.14159) theta += 2 * 3.14159;
+        // 4. Calculate New Position (The "Two Step" / Exact Arc Method)
+        if (abs(deltaTheta) < 0.0001) {
+            // CASE 1: Moving Straight (approx)
+            // If angle change is tiny, use 2nd Order Runge-Kutta (Midpoint)
+            // This prevents "Divide by Zero" errors.
+            float midTheta = theta + (deltaTheta / 2.0);
+            float t_theta =  midTheta * RAD_TO_DEG;
+            
+            x += (deltaDist * Cos(t_theta));
+            y += (deltaDist * Sin(t_theta));
+            theta += deltaTheta;
+        }
+        else {
+            // CASE 2: Moving in an Arc (Exact Solution)
+            // Radius of Curvature R = deltaDist / deltaTheta
+            float radius = deltaDist / deltaTheta;
+            float oldTheta = theta;
+            float newTheta = theta + deltaTheta;
+            
+            float t_theta_new =  newTheta * RAD_TO_DEG;
+            float t_theta_old =  oldTheta * RAD_TO_DEG;
+            
+            // x_new = x_old + R * (sin(theta_new) - sin(theta_old))
+            x += (radius * (Sin(t_theta_new) - Sin(t_theta_old)));
 
-        x += distCenter * cos(theta);
-        y += distCenter * sin(theta);
+            // y_new = y_old - R * (cos(theta_new) - cos(theta_old))
+            y -= (radius * (Cos(t_theta_new) - Cos(t_theta_old)));
 
-        SavePosition(x, y, theta);
+            theta = newTheta;
+        }
 
-        ClearScreen();
-        TextOut(0, LCD_LINE1, "X:");
-        NumOut(20, LCD_LINE1, x * 100);   // implicit float to int
-        TextOut(0, LCD_LINE2, "Y:");
-        NumOut(20, LCD_LINE2, y * 100);
-        TextOut(0, LCD_LINE3, "Theta:");
-        NumOut(40, LCD_LINE3, theta * 1000);
+        // Normalize Theta to -PI to +PI
+        while(theta > 3.14159) theta -= 6.28318;
+        while(theta < -3.14159) theta += 6.28318;
 
-        Wait(50);
+        // --- C. LOGGING ---
+        if (CurrentTick() - last_log_time > 100) {
+            if (data_index < MAX_POINTS) {
+                logX[data_index] = x;
+                logY[data_index] = y;
+                logTheta[data_index] = theta;
+                data_index++;
+            }
+            last_log_time = CurrentTick();
+
+            // Debug Display
+            NumOut(0, LCD_LINE3, x);
+            NumOut(50, LCD_LINE3, y);
+        }
+
+        // Fast loop frequency
+        Wait(10);
     }
 
-    FileClose(fileHandle);
+    // 5. Shutdown and Save
     Off(BOTH);
+    WriteLogToFile();
+    Wait(2000);
 }

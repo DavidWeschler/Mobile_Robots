@@ -1,0 +1,182 @@
+#define LEFT      OUT_C
+#define RIGHT     OUT_A
+#define BOTH      OUT_AC
+
+#define LIGHT     IN_3
+#define TOUCH     IN_1
+
+#define FILE_NAME "ROUTE.TXT"
+
+// --- PHYSICAL CONSTANTS (cm) ---
+const float WHEEL_DIAMETER = 5.6;
+const float TRACK_WIDTH    = 11.8;
+
+// --- ODOMETRY VARIABLES ---
+float x_cm = 0.0;
+float y_cm = 0.0;
+float theta_rad = 0.0;
+
+long old_enc_left = 0;
+long old_enc_right = 0;
+
+// --- DATA LOGGING ---
+#define MAX_LOG_POINTS 2500
+float logX[MAX_LOG_POINTS];
+float logY[MAX_LOG_POINTS];
+float logTheta[MAX_LOG_POINTS];
+
+int data_index = 0;
+int loop_counter = 0;
+#define LOG_INTERVAL 5     // Log every 5 PID cycles
+
+byte fileHandle;
+
+// --- PID PARAMETERS ---
+float Kp = 2.0;
+float Ki = 0.0;
+float Kd = 2.0;
+
+float error = 0;
+float lastError = 0;
+float integral = 0;
+float derivative = 0;
+float correction = 0;
+
+// Base speed
+int BASE_SPEED = 90;
+
+// Calibration values
+int BLACK = 30;
+int WHITE = 60;
+int TARGET;
+
+// --- FILE SAVING FUNCTION ---
+void WriteLogToFile()
+{
+    DeleteFile(FILE_NAME);
+    if (CreateFile(FILE_NAME, 15000, fileHandle) == LDR_SUCCESS)
+    {
+        TextOut(0, LCD_LINE1, "SAVING...");
+        TextOut(0, LCD_LINE2, "PLEASE WAIT");
+
+        string header = "rows: ";
+        header = StrCat(header, NumToStr(data_index));
+        unsigned int bw0 = 0;
+        WriteLnString(fileHandle, header, bw0);
+
+        for (int i = 0; i < data_index; i++)
+        {
+            long xo = logX[i] * 10000;
+            long yo = logY[i] * 10000;
+            long to = logTheta[i] * 100000;
+
+            string s = NumToStr(xo);
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(yo));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(to));
+            s = StrCat(s, "\n");
+
+            unsigned int bw = 0;
+            WriteString(fileHandle, s, bw);
+        }
+
+        CloseFile(fileHandle);
+        PlaySound(SOUND_UP);
+        TextOut(0, LCD_LINE3, "DONE!");
+        Wait(2000);
+    }
+    else {
+        TextOut(0, LCD_LINE1, "SAVE ERROR");
+        PlaySound(SOUND_LOW_BEEP);
+        Wait(2000);
+    }
+}
+
+task main()
+{
+    // --- SENSOR SETUP ---
+    SetSensorLight(LIGHT, true);
+    SetSensor(TOUCH, SENSOR_TOUCH);
+
+    TARGET = (BLACK + WHITE) / 2;
+
+    // --- RESET ENCODERS ---
+    ResetTachoCount(LEFT);
+    ResetTachoCount(RIGHT);
+    old_enc_left = 0;
+    old_enc_right = 0;
+
+    TextOut(0, LCD_LINE1, "PID + ODO READY");
+    Wait(1000);
+
+    // --- MAIN LOOP ---
+    while (Sensor(TOUCH) != 1)
+    {
+        // ===== ODOMETRY =====
+
+        long curr_enc_left  = MotorRotationCount(LEFT);
+        long curr_enc_right = MotorRotationCount(RIGHT);
+
+        long d_ticks_left  = curr_enc_left  - old_enc_left;
+        long d_ticks_right = curr_enc_right - old_enc_right;
+
+        old_enc_left  = curr_enc_left;
+        old_enc_right = curr_enc_right;
+
+        float d_left  = d_ticks_left  * (PI * WHEEL_DIAMETER / 360.0);
+        float d_right = d_ticks_right * (PI * WHEEL_DIAMETER / 360.0);
+
+        float d_center = (d_left + d_right) / 2.0;
+        float d_theta  = (d_right - d_left) / TRACK_WIDTH;
+
+        float avg_theta = theta_rad + (d_theta / 2.0);
+
+        x_cm += d_center * cos(avg_theta);
+        y_cm += d_center * sin(avg_theta);
+        theta_rad += d_theta;
+
+        // Log every Nth iteration
+        loop_counter++;
+        if (loop_counter >= LOG_INTERVAL)
+        {
+            if (data_index < MAX_LOG_POINTS)
+            {
+                logX[data_index]     = x_cm;
+                logY[data_index]     = y_cm;
+                logTheta[data_index] = theta_rad;
+                data_index++;
+            }
+            loop_counter = 0;
+        }
+
+        // ===== PID LINE FOLLOWING =====
+
+        int lightValue = Sensor(LIGHT);
+
+        error = TARGET - lightValue;
+        integral += error;
+        derivative = error - lastError;
+
+        correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+        lastError = error;
+
+        int leftSpeed  = BASE_SPEED + correction;
+        int rightSpeed = BASE_SPEED - correction;
+
+        if (leftSpeed > 100)  leftSpeed = 100;
+        if (leftSpeed < -100) leftSpeed = -100;
+
+        if (rightSpeed > 100)  rightSpeed = 100;
+        if (rightSpeed < -100) rightSpeed = -100;
+
+        OnFwd(LEFT,  leftSpeed);
+        OnFwd(RIGHT, rightSpeed);
+
+        Wait(10);
+    }
+
+    // Stop and save file
+    Off(BOTH);
+    WriteLogToFile();
+}

@@ -116,8 +116,8 @@ void DrawPathOnScreen()
     LineOut(end_sx-2, end_sy-2, end_sx+2, end_sy+2);
     LineOut(end_sx-2, end_sy+2, end_sx+2, end_sy-2);
 
-    //TextOut(0, LCD_LINE1, "Map View");
-    //TextOut(0, LCD_LINE8, "Press Orange Btn");
+    // TextOut(0, LCD_LINE1, "Map View");
+    // TextOut(0, LCD_LINE8, "Press Orange Btn");
 
     // Wait for user to press Enter (Orange button)
     while(!ButtonPressed(BTNCENTER, false));

@@ -1,0 +1,60 @@
+#define LEFT_MOTOR   OUT_C
+#define RIGHT_MOTOR  OUT_A
+#define BOTH_MOTORS  OUT_AC
+
+#define US_PORT      S4
+
+// Desired distance range from the wall
+const int MIN_DIST = 39;
+const int MAX_DIST = 41;
+
+// Movement speeds
+const int BASE_SPEED = 35;      // Forward speed
+const int TURN_SPEED = 25;      // In-place turn speed
+
+task main() {
+    SetSensorLowspeed(US_PORT);
+
+    while (true) {
+
+        // Read ultrasonic distance
+        int dist = SensorUS(US_PORT);
+
+        // --- CASE 1: Too close to wall (< 39 cm) ---
+        if (dist < MIN_DIST) {
+
+            Off(BOTH_MOTORS);
+
+            // STEP 1: Reverse until we get back into range
+            while (SensorUS(US_PORT) <= MIN_DIST) {
+                OnRev(BOTH_MOTORS, BASE_SPEED);
+                Wait(1);
+            }
+            Off(BOTH_MOTORS);
+
+            // STEP 2: Turn right in place to re-align
+            while (SensorUS(US_PORT) <= MAX_DIST) {
+                OnFwd(LEFT_MOTOR,  TURN_SPEED);   // Left motor forward
+                OnRev(RIGHT_MOTOR, TURN_SPEED);   // Right motor backward
+                Wait(5);
+            }
+
+            // STEP 3: Resume forward motion
+            OnFwd(BOTH_MOTORS, BASE_SPEED);
+        }
+
+        // --- CASE 2: Too far (> 41 cm) ---
+        else if (dist > MAX_DIST) {
+            // Slight right drift correction
+            OnFwd(LEFT_MOTOR,  BASE_SPEED);
+            OnFwd(RIGHT_MOTOR, BASE_SPEED - 10);
+        }
+
+        // --- CASE 3: Inside target range ---
+        else {
+            OnFwd(BOTH_MOTORS, BASE_SPEED);
+        }
+
+        Wait(5); // Much smoother loop timing
+    }
+}

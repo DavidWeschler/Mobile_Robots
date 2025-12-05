@@ -1,0 +1,38 @@
+#define MIC IN_3
+
+task main()
+{
+    SetSensorSound(MIC);
+
+    // 1. Initialize a variable to hold the maximum value
+    int max_level = 0;
+
+    while(true)
+    {
+        int level = Sensor(MIC);
+
+        // 2. Check if current level is higher than the saved max
+        if (level > max_level) {
+            max_level = level;
+        }
+
+        ClearScreen();
+
+        // Display Current Level
+        TextOut(0, LCD_LINE1, "Cur:");
+        NumOut(30, LCD_LINE1, level);
+
+        // 3. Display Max Level
+        TextOut(0, LCD_LINE2, "Max:");
+        NumOut(30, LCD_LINE2, max_level);
+
+        // Draw the filled bar for CURRENT volume
+        RectOut(0, 0, level, 15);
+
+        // 4. Draw a vertical line to visually mark the MAX volume
+        // Args: x1, y1, x2, y2
+        LineOut(max_level, 0, max_level, 18);
+
+        Wait(50);
+    }
+}

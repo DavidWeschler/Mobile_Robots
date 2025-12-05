@@ -1,0 +1,122 @@
+/*
+גרסה ראשונה, לא לגעת
+גרסה לא טובה בגלל שהסיבובית תלויים בזמן ולא בזווית. 
+לכן עברנו לגרסה הבאה.
+
+*/
+
+
+#define RIGHT_MOTOR   OUT_C
+#define LEFT_MOTOR    OUT_A
+#define ULTRASONIC_SENSOR S4
+#define TOUCH_SENSOR S1
+
+const int TARGET_DISTANCE = 30; // cm
+const int DEAD_ZONE = 3;        // cm tolerance dead zone
+const int BASE_SPEED = 50;      // moderate base speed for stability
+
+const float KP = 1.5;           // Proportional gain
+const float KI = 0.0;         // Integral gain (small)
+const float KD = 10;           // Reduced derivative gain for smoother control
+
+const float INTEGRAL_MAX = 1000;
+const float INTEGRAL_MIN = -1000;
+
+int GetDistance() {
+    int dist = SensorUS(ULTRASONIC_SENSOR);
+    return (dist > 255 ? 255 : dist);
+}
+
+task main()
+{
+    SetSensorLowspeed(ULTRASONIC_SENSOR);
+    SetSensorTouch(TOUCH_SENSOR);
+
+    PlaySound(SOUND_CLICK);
+    TextOut(0, LCD_LINE1, "Wall Follow Start");
+
+    float integral = 0;
+    int lastError = 0;
+
+    int prevLeftSpeed = BASE_SPEED;
+    int prevRightSpeed = BASE_SPEED;
+
+    while (true) {
+        // 1. Corner detection (touch sensor)
+        if (Sensor(TOUCH_SENSOR) == 1) {
+            Off(LEFT_MOTOR); Off(RIGHT_MOTOR);
+            Wait(100);
+            // Back up
+            OnRev(LEFT_MOTOR, BASE_SPEED);
+            OnRev(RIGHT_MOTOR, BASE_SPEED);
+            Wait(500);
+            Off(LEFT_MOTOR); Off(RIGHT_MOTOR);
+            Wait(100);
+            // Turn ~90° right (clockwise)
+            OnFwd(LEFT_MOTOR, BASE_SPEED);
+            OnRev(RIGHT_MOTOR, BASE_SPEED);
+            Wait(450);
+            Off(LEFT_MOTOR); Off(RIGHT_MOTOR);
+            Wait(100);
+
+            // Reset integral and lastError on corner
+            integral = 0;
+            lastError = 0;
+            prevLeftSpeed = BASE_SPEED;
+            prevRightSpeed = BASE_SPEED;
+            continue;
+        }
+
+        // 2. Wall-following with ultrasonic + PID control
+        int distance = GetDistance();
+        int error = distance - TARGET_DISTANCE;
+
+        // Apply dead zone tolerance
+        if (abs(error) < DEAD_ZONE) {
+            error = 0;
+        }
+
+        // Integral with anti-windup: clamp integral within bounds
+        if (abs(error) < 20) {
+            integral += error;
+            if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
+            else if (integral < INTEGRAL_MIN) integral = INTEGRAL_MIN;
+        } else {
+            integral = 0; // reset if error too big (e.g. after corner)
+        }
+
+        int derivative = error - lastError;
+
+        // PID calculation
+        float turnRatio = (KP * error) + (KI * integral) + (KD * derivative);
+
+        // Calculate raw motor speeds
+        int leftSpeed  = BASE_SPEED - turnRatio;
+        int rightSpeed = BASE_SPEED + turnRatio;
+
+        // Clamp raw speeds 0..100
+        if (leftSpeed < 0) leftSpeed = 0;
+        if (rightSpeed < 0) rightSpeed = 0;
+        if (leftSpeed > 100) leftSpeed = 100;
+        if (rightSpeed > 100) rightSpeed = 100;
+
+        prevLeftSpeed = leftSpeed;
+        prevRightSpeed = rightSpeed;
+
+        // Apply speeds
+        OnFwd(LEFT_MOTOR, leftSpeed);
+        OnFwd(RIGHT_MOTOR, rightSpeed);
+
+        lastError = error;
+
+        // Debug output
+        ClearScreen();
+        TextOut(0, LCD_LINE1, "Dist:" + NumToStr(distance));
+        TextOut(0, LCD_LINE2, "Err:" + NumToStr(error));
+        TextOut(0, LCD_LINE3, "Int:" + NumToStr(integral));
+        TextOut(0, LCD_LINE4, "Der:" + NumToStr(derivative));
+        TextOut(0, LCD_LINE5, "L:" + NumToStr(leftSpeed) + " R:" + NumToStr(rightSpeed));
+
+        Wait(20); // Slightly longer wait for stability
+    }
+}

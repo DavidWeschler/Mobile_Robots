@@ -2,19 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import random
+from skimage.transform import probabilistic_hough_line
 
 # --- Configuration ---
 FILE_NAME = "EX2/plots/MAP.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
-
-# Hough Parameters
-RHO_RESOLUTION = 2.0    # cm per bin
-THETA_RESOLUTION = 1.0  # degrees per bin
-MIN_VOTES = 25          # Minimum points to consider a line
-MAX_WALLS = 8          # Safety limit to stop infinite loops
-DIST_THRESHOLD = 6.0    # cm - Distance to line to be considered an inlier
 
 # Fix randomness
 random.seed(42)
@@ -23,10 +17,6 @@ np.random.seed(42)
 # --- 1. Drift Correction ---
 
 def correct_odometry_drift(x_robot, y_robot):
-    """
-    Corrects odometry drift by forcing the last point to match the first point.
-    The error is distributed linearly across all points.
-    """
     drift_x = x_robot[-1] - x_robot[0]
     drift_y = y_robot[-1] - y_robot[0]
     num_points = len(x_robot)
@@ -41,10 +31,21 @@ def correct_odometry_drift(x_robot, y_robot):
         
     return x_corrected, y_corrected
 
-# --- 2. Math & Hough Helpers ---
+# --- 2. Math Helpers ---
+
+def get_line_params_from_points(p1, p2):
+    """Returns m, c for y = mx + c given two points."""
+    x1, y1 = p1
+    x2, y2 = p2
+    
+    if abs(x2 - x1) < 1e-5: # Vertical line
+        return float('inf'), x1
+        
+    m = (y2 - y1) / (x2 - x1)
+    c = y1 - m * x1
+    return m, c
 
 def find_intersection(m1, c1, m2, c2):
-    """Finds intersection (x, y) of two lines y=mx+c."""
     if m1 == float('inf') and m2 == float('inf'): return None
     if m1 == float('inf'): return c1, m2 * c1 + c2
     if m2 == float('inf'): return c2, m1 * c2 + c1
@@ -54,259 +55,198 @@ def find_intersection(m1, c1, m2, c2):
     y = m1 * x + c1
     return x, y
 
-def fit_line_least_squares(x_points, y_points):
-    """
-    Fits a line to a set of points using Linear Least Squares (Pseudo-Inverse).
-    Returns (slope m, intercept c). Handles vertical lines.
-    """
-    x = np.array(x_points)
-    y = np.array(y_points)
-    
-    # Check if vertical (variance in x is tiny compared to y)
-    if np.std(x) < 0.01 * np.std(y): 
-        return float('inf'), np.mean(x)
+# --- 3. Hough Transform Logic ---
 
-    A = np.vstack([x, np.ones(len(x))]).T
-    m, c = np.linalg.lstsq(A, y, rcond=None)[0]
-    return m, c
+def points_to_grid(x_pts, y_pts, resolution=2.0):
+    """
+    Converts float coordinates to a boolean grid (image) for Hough Transform.
+    resolution: Size of one grid cell in real-world units.
+    """
+    if len(x_pts) == 0: return None, None, None, None
 
-def perform_hough_transform(x, y, rho_res=1.0, theta_step=1.0):
-    """
-    Vectorized Hough Transform.
-    Returns: accumulator (grid), thetas (radians), rhos (values)
-    """
-    # 1. Define Theta Range (-90 to 90 degrees)
-    thetas_deg = np.arange(-90, 90, theta_step)
-    thetas_rad = np.deg2rad(thetas_deg)
+    min_x, max_x = min(x_pts), max(x_pts)
+    min_y, max_y = min(y_pts), max(y_pts)
     
-    # 2. Precompute Sin/Cos
-    cos_t = np.cos(thetas_rad)
-    sin_t = np.sin(thetas_rad)
+    # Add padding
+    padding = 10.0
+    width = int((max_x - min_x + 2*padding) / resolution)
+    height = int((max_y - min_y + 2*padding) / resolution)
     
-    # 3. Calculate Rho for every point and every angle
-    # Shape: (num_points, num_thetas)
-    # rho = x * cos(theta) + y * sin(theta)
-    rhos_calc = np.outer(x, cos_t) + np.outer(y, sin_t)
+    grid = np.zeros((height, width), dtype=bool)
     
-    # 4. Binning
-    # Find global min/max rho to define the grid size
-    max_rho_val = np.ceil(np.max(np.abs(rhos_calc)))
-    # Create bins from -max to +max
-    rho_bins = np.arange(-max_rho_val, max_rho_val, rho_res)
+    # Map real coords to grid indices
+    img_x_offset = min_x - padding
+    img_y_offset = min_y - padding
     
-    # 5. Accumulate votes
-    accumulator = np.zeros((len(rho_bins), len(thetas_rad)), dtype=np.int32)
-    
-    # Digitizing maps the calculated rho values to bin indices
-    for i in range(len(thetas_rad)):
-        # Get rhos for this specific angle across all points
-        col_rhos = rhos_calc[:, i]
-        # Find which bin they fall into
-        bin_indices = np.digitize(col_rhos, rho_bins) - 1
-        
-        # Filter out of bounds (just safety)
-        valid_mask = (bin_indices >= 0) & (bin_indices < len(rho_bins))
-        valid_indices = bin_indices[valid_mask]
-        
-        # Count occurrences (votes)
-        unique_bins, counts = np.unique(valid_indices, return_counts=True)
-        accumulator[unique_bins, i] = counts
+    for x, y in zip(x_pts, y_pts):
+        ix = int((x - img_x_offset) / resolution)
+        iy = int((y - img_y_offset) / resolution)
+        if 0 <= ix < width and 0 <= iy < height:
+            grid[iy, ix] = True # Note: y is row, x is col
+            
+    return grid, img_x_offset, img_y_offset, resolution
 
-    return accumulator, thetas_rad, rho_bins
+def extract_walls_hough(x_all, y_all, params):
+    """
+    Extracts lines using Probabilistic Hough Transform.
+    """
+    # 1. Convert points to Image Grid
+    res = 1.0 # 1 cm resolution
+    grid, off_x, off_y, res = points_to_grid(x_all, y_all, resolution=res)
+    
+    if grid is None: return []
 
-def extract_walls_hough(x_all, y_all, dist_threshold=DIST_THRESHOLD):
-    """
-    Iterative Hough Transform:
-    1. Run Hough.
-    2. Find best line.
-    3. Remove inliers.
-    4. Repeat.
-    """
-    remaining_x = np.array(x_all)
-    remaining_y = np.array(y_all)
+    # 2. Run Hough
+    lines_p = probabilistic_hough_line(grid, 
+                                       threshold=params['thresh'], 
+                                       line_length=params['len'], 
+                                       line_gap=params['gap'])
+    
     found_walls = []
     
-    iteration = 0
-    
-    while len(remaining_x) > MIN_VOTES and iteration < MAX_WALLS:
-        print(f"  Hough Iteration {iteration+1} (Points left: {len(remaining_x)})")
+    # 3. Convert back to world coordinates
+    for p0, p1 in lines_p:
+        # p0 is (col, row) -> (x, y)
+        x0_world = p0[0] * res + off_x
+        y0_world = p0[1] * res + off_y
+        x1_world = p1[0] * res + off_x
+        y1_world = p1[1] * res + off_y
         
-        # 1. Run Hough on remaining points
-        acc, thetas, rhos = perform_hough_transform(
-            remaining_x, remaining_y, 
-            rho_res=RHO_RESOLUTION, 
-            theta_step=THETA_RESOLUTION
-        )
-        
-        # 2. Find Peak (Highest Vote)
-        if np.max(acc) < MIN_VOTES:
-            break
-            
-        # Get index of max vote
-        idx = np.unravel_index(np.argmax(acc), acc.shape)
-        rho_idx, theta_idx = idx
-        
-        best_rho = rhos[rho_idx]
-        best_theta = thetas[theta_idx]
-        
-        # 3. Find Inliers (Geometric distance from point to line)
-        # Line eq: x*cos(t) + y*sin(t) - rho = 0
-        distances = np.abs(remaining_x * np.cos(best_theta) + 
-                           remaining_y * np.sin(best_theta) - best_rho)
-        
-        inlier_mask = distances < dist_threshold
-        
-        # 4. Extract Inlier Points
-        wall_x = remaining_x[inlier_mask]
-        wall_y = remaining_y[inlier_mask]
-        
-        # If we accidentally grabbed too few points due to discretization error
-        if len(wall_x) < MIN_VOTES:
-            # Zero out this peak and try again without re-calculating everything
-            acc[rho_idx, theta_idx] = 0
-            continue
-
-        # 5. Re-Fit Line using Least Squares (Better accuracy than Hough bin)
-        m, c = fit_line_least_squares(wall_x, wall_y)
+        m, c = get_line_params_from_points((x0_world, y0_world), (x1_world, y1_world))
         
         found_walls.append({
             'm': m, 'c': c,
-            'x_points': wall_x, 'y_points': wall_y,
-            'rho': best_rho, 'theta': best_theta # Store raw hough params too just in case
+            'x_points': [x0_world, x1_world], 
+            'y_points': [y0_world, y1_world]
         })
-        
-        # 6. Remove inliers from dataset
-        remaining_x = remaining_x[~inlier_mask]
-        remaining_y = remaining_y[~inlier_mask]
-        
-        iteration += 1
         
     return found_walls
 
-# --- 3. Main Logic ---
+# --- 4. Processing & Geometry ---
 
-def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
-    
-    # 1. Loop Closure Correction
-    print("Correcting Drift...")
-    x_robot_corr, y_robot_corr = correct_odometry_drift(x_robot, y_robot)
-    
-    # 2. Recalculate Wall Points
+def compute_map_geometry(x_robot_corr, y_robot_corr, theta_robot, dist_meas, hough_params):
+    # 1. Calculate Wall Points
     x_wall = []
     y_wall = []
     for i in range(len(x_robot_corr)):
         sensor_heading = theta_robot[i] + SENSOR_ANGLE_OFFSET
-        wx = x_robot_corr[i] + distance_measured[i] * math.cos(sensor_heading)
-        wy = y_robot_corr[i] + distance_measured[i] * math.sin(sensor_heading)
+        wx = x_robot_corr[i] + dist_meas[i] * math.cos(sensor_heading)
+        wy = y_robot_corr[i] + dist_meas[i] * math.sin(sensor_heading)
         x_wall.append(wx)
         y_wall.append(wy)
 
-    # 3. Hough Extraction
-    print("Extracting Walls (Iterative Hough)...")
-    walls = extract_walls_hough(x_wall, y_wall)
+    # 2. Extract Walls (Hough)
+    walls = extract_walls_hough(x_wall, y_wall, hough_params)
     
-    # --- Correcting Wall Order (GEOMETRIC SORT) ---
-    # Step A: Find the centroid of all detected wall points
-    all_wall_x = []
-    all_wall_y = []
-    for w in walls:
-        all_wall_x.extend(w['x_points'])
-        all_wall_y.extend(w['y_points'])
-    
-    if not all_wall_x:
-        print("No walls found!")
-        return
+    if not walls:
+        return x_wall, y_wall, [], [], []
 
-    center_x = np.mean(all_wall_x)
-    center_y = np.mean(all_wall_y)
+    # 3. Geometric Sort (Centroid logic)
+    all_pts_x = [pt for w in walls for pt in w['x_points']]
+    all_pts_y = [pt for w in walls for pt in w['y_points']]
+    center_x = np.mean(all_pts_x) if all_pts_x else 0
+    center_y = np.mean(all_pts_y) if all_pts_y else 0
     
-    # Step B: Calculate angle of each wall relative to the center
     for w in walls:
         wall_mid_x = np.mean(w['x_points'])
         wall_mid_y = np.mean(w['y_points'])
         w['angle_to_center'] = math.atan2(wall_mid_y - center_y, wall_mid_x - center_x)
     
-    # Step C: Sort walls by angle
     sorted_walls = sorted(walls, key=lambda x: x['angle_to_center'])
     
-    # --- Plotting ---
-    plt.figure(figsize=(10, 8))
-    
-    # Plot original points
-    plt.plot(x_wall, y_wall, '.', color='lightgray', markersize=2, label='Points')
-    
-    lines = []
-    colors = plt.cm.rainbow(np.linspace(0, 1, len(sorted_walls)))
-    
-    for i, w in enumerate(sorted_walls):
-        m, c = w['m'], w['c']
-        lines.append((m, c))
-        
-        # Plot points belonging to this wall
-        plt.plot(w['x_points'], w['y_points'], '.', color=colors[i], markersize=4)
-        
-        # Plot fitted line
-        wx = w['x_points']
-        if m != float('inf'):
-            x_range = np.linspace(min(wx), max(wx), 10)
-            y_range = m * x_range + c
-            plt.plot(x_range, y_range, '-', color=colors[i], linewidth=2)
-        else:
-            plt.vlines(c, min(w['y_points']), max(w['y_points']), colors[i], linewidth=2)
-
-    # --- Corner Calculation & Labels ---
+    # 4. Find Corners
     corners_x = []
     corners_y = []
+    
+    lines = [(w['m'], w['c']) for w in sorted_walls]
     
     if len(lines) >= 3:
         for i in range(len(lines)):
             l1 = lines[i]
             l2 = lines[(i + 1) % len(lines)]
-            
             res = find_intersection(l1[0], l1[1], l2[0], l2[1])
             if res:
                 corners_x.append(res[0])
                 corners_y.append(res[1])
         
-        # Close the shape
+        # Close loop
         if corners_x:
             corners_x.append(corners_x[0])
             corners_y.append(corners_y[0])
-            plt.plot(corners_x, corners_y, 'k--', linewidth=1.5, marker='o', 
-                     markersize=8, markerfacecolor='yellow', label='Closed Map')
-            
-            # Add length labels
-            for i in range(len(corners_x) - 1):
-                p1_x, p1_y = corners_x[i], corners_y[i]
-                p2_x, p2_y = corners_x[i+1], corners_y[i+1]
-                
-                dist = math.sqrt((p2_x - p1_x)**2 + (p2_y - p1_y)**2)
-                mid_x, mid_y = (p1_x + p2_x) / 2, (p1_y + p2_y) / 2
-                
-                plt.text(mid_x, mid_y, f"{dist:.1f}", fontsize=9, fontweight='bold',
-                         bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.2'))
 
-    plt.title('Final Map: Drift Correction + Iterative Hough', fontsize=16)
-    plt.xlabel('X (cm)')
-    plt.ylabel('Y (cm)')
-    plt.axis('equal')
-    plt.legend()
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.show()
+    return x_wall, y_wall, sorted_walls, corners_x, corners_y
 
-# --- Load Data ---
-def load_and_process_data():
+# --- 5. Main Execution ---
+
+def main():
     try:
+        # Load Data
         data = np.loadtxt(FILE_NAME, delimiter=',')
         x_robot = data[:, 0] / X_Y_SCALE
         y_robot = data[:, 1] / X_Y_SCALE
         theta_robot = data[:, 2] / THETA_SCALE
         distance_measured = data[:, 3]
         
-        process_map_data(x_robot, y_robot, theta_robot, distance_measured)
+        # Correct Drift once
+        x_corr, y_corr = correct_odometry_drift(x_robot, y_robot)
+
+        # --- Generate 9 Hyperparameter Sets ---
+        thresholds = [10, 25, 40]
+        line_gaps = [3, 8, 15]
         
+        param_sets = []
+        for t in thresholds:
+            for g in line_gaps:
+                param_sets.append({
+                    'thresh': t, 
+                    'gap': g, 
+                    'len': 20
+                })
+        
+        # --- Plotting ---
+        fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+        fig.suptitle(f"Hough Transform: 9 Hyperparameter Configurations", fontsize=16)
+        axes = axes.flatten()
+
+        for i, params in enumerate(param_sets):
+            ax = axes[i]
+            
+            xw, yw, walls, cx, cy = compute_map_geometry(x_corr, y_corr, theta_robot, distance_measured, params)
+            
+            # Plot Raw Points
+            ax.plot(xw, yw, '.', color='lightgray', markersize=1)
+            
+            # Plot Walls
+            colors = plt.cm.jet(np.linspace(0, 1, len(walls)))
+            for j, w in enumerate(walls):
+                ax.plot(w['x_points'], w['y_points'], '-', color=colors[j], linewidth=2, alpha=0.7)
+            
+            # Plot Corners and Length Labels
+            if cx:
+                ax.plot(cx, cy, 'k--', marker='o', markerfacecolor='yellow', markersize=5, linewidth=1.5)
+                
+                # --- ADDED: Length Labels ---
+                for k in range(len(cx) - 1):
+                    p1_x, p1_y = cx[k], cy[k]
+                    p2_x, p2_y = cx[k+1], cy[k+1]
+                    
+                    dist = math.sqrt((p2_x - p1_x)**2 + (p2_y - p1_y)**2)
+                    mid_x, mid_y = (p1_x + p2_x) / 2, (p1_y + p2_y) / 2
+                    
+                    ax.text(mid_x, mid_y, f"{dist:.1f}", fontsize=8, fontweight='bold',
+                            color='black', ha='center', va='center',
+                            bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.1'))
+
+            ax.set_title(f"Thresh:{params['thresh']} | Gap:{params['gap']} | Len:{params['len']}")
+            ax.axis('equal')
+            ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)
+        plt.show()
+
     except Exception as e:
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    load_and_process_data()
+    main()

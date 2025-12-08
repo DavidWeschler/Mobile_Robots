@@ -28,18 +28,18 @@ int logDistance[MAX_LOG_POINTS];
 
 int data_index = 0;
 int loop_counter = 0;
-#define LOG_INTERVAL 5     // Log every 5 PID cycles
+#define LOG_INTERVAL 1     // Log every 5 PID cycles
 
 byte fileHandle;
 
 
-const int TARGET_DISTANCE = 30; 
-const int DEAD_ZONE = 2;        
-const int BASE_SPEED = 50;      
+const int TARGET_DISTANCE = 30;
+const int DEAD_ZONE = 2;
+const int BASE_SPEED = 50;
 const int BLACK_THRESHOLD = 30;
 
 // PID Constants (You may need to re-tune these after removing ramping)
-const float KP = 1.2;           
+const float KP = 1.2;
 const float KI = 0.005;         // Very small KI is safer
 const float KD = 15.0;          // Increased KD to handle "braking" naturally
 
@@ -56,12 +56,12 @@ bool onLine = false; // Flag to prevent counting the same line twice
 int GetFilteredDistance() {
     int raw = SensorUS(ULTRASONIC_SENSOR);
     if (raw > 255) raw = 255; // Cap weird spikes
-    
+
     for (int i = N - 1; i > 0; i--) {
         samples[i] = samples[i - 1];
     }
     samples[0] = raw;
-    
+
     // Return average (Integer math is fine here)
     int sum = 0;
     for (int i = 0; i < N; i++) {
@@ -78,7 +78,7 @@ void CheckLine() {
     if (Sensor(LIGHT_SENSOR) < BLACK_THRESHOLD) {
         if (onLine == false) {
             lineCount++;
-            onLine = true; 
+            onLine = true;
         }
     } else {
         // Only reset if we see clearly white (hysteresis prevents flicker)
@@ -95,7 +95,7 @@ void WriteLogToFile()
     {
         TextOut(0, LCD_LINE1, "SAVING...");
         TextOut(0, LCD_LINE2, "PLEASE WAIT");
-        
+
 
         for (int i = 0; i < data_index; i++)
         {
@@ -177,7 +177,7 @@ task main()
         int distance = GetFilteredDistance();
         // Log every Nth iteration
         loop_counter++;
-        if (loop_counter >= LOG_INTERVAL)
+        if (loop_counter >= LOG_INTERVAL && lineCount>=2)
         {
             if (data_index < MAX_LOG_POINTS)
             {
@@ -204,17 +204,17 @@ task main()
         if (Sensor(TOUCH_SENSOR) == 1) {
             Off(LEFT_MOTOR); Off(RIGHT_MOTOR);
             Wait(200);
-            
+
             // Back up exactly 180 degrees of wheel rotation
             RotateMotor(BOTH_MOTORS, BASE_SPEED, -180);
-            
+
             Wait(200);
             CheckLine();
-            
+
             // Turn Right: Move Left Motor Fwd, Right Motor Rev
             RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
             CheckLine();
-            
+
             // Reset PID memory
             integral = 0;
             lastError = 0;
@@ -224,12 +224,12 @@ task main()
                 samples[i] = current;
             }
 
-            continue; 
+            continue;
         }
 
         // --- PID CONTROL ---
-        
-        distance = GetFilteredDistance(); 
+
+        distance = GetFilteredDistance();
         int error = distance - TARGET_DISTANCE;
 
         // Dead zone
@@ -244,7 +244,7 @@ task main()
         } else {
             integral = 0; // Zero out integral if we are way off course
         }
-        
+
         // Hard Clamp Integral
         if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
         if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;
@@ -274,7 +274,7 @@ task main()
 
         // --- 4. IMPROVEMENT: Slower Loop Time ---
         // 40ms is better for US sensor stability
-        Wait(40); 
+        Wait(40);
     }
     WriteLogToFile();
 }

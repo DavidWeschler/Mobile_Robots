@@ -75,7 +75,7 @@ def find_intersection(m1, c1, m2, c2):
     y = m1 * x + c1
     return x, y
 
-def extract_walls_ransac(x_all, y_all, max_distance=4.0, min_points=10, iterations=1000):
+def extract_walls_ransac(x_all, y_all, max_distance=4.0, min_points=20, iterations=1000):
     remaining_indices = list(range(len(x_all)))
     found_walls = []
     

@@ -4,7 +4,7 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "EX2/plots/MAP.TXT"
+FILE_NAME = "EX2/plots/MAP_GOOD.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
@@ -168,6 +168,12 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     sorted_walls = sorted(walls, key=lambda x: x['angle_to_center'])
     
     # --- 5. TEMPORAL ALIGNMENT & ORIENTATION CHECK ---
+    
+    # Track start point and rotation
+    start_x = x_robot_corr[0]
+    start_y = y_robot_corr[0]
+    total_rotation = 0.0
+
     anchor_wall = None
     min_index_found = float('inf')
     
@@ -189,6 +195,11 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
             current_angle = math.atan(m_anchor)
             
         rotation_angle = -current_angle
+        total_rotation += rotation_angle
+        
+        # Rotate start point
+        sx, sy = rotate_points([start_x], [start_y], rotation_angle)
+        start_x, start_y = sx[0], sy[0]
         
         # 5a. Apply First Rotation (Horizontal Alignment)
         all_x_temp = []
@@ -211,6 +222,11 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
         if map_centroid_y < anchor_centroid_y:
             print("Map is upside down. Flipping 180 degrees...")
             rotation_fix = math.pi # 180 degrees
+            total_rotation += rotation_fix
+            
+            # Rotate start point
+            sx, sy = rotate_points([start_x], [start_y], rotation_fix)
+            start_x, start_y = sx[0], sy[0]
             
             for w in sorted_walls:
                 rx, ry = rotate_points(w['x_points'], w['y_points'], rotation_fix)
@@ -273,6 +289,48 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
                 
                 plt.text(mid_x, mid_y, f"{dist:.1f}", fontsize=9, fontweight='bold',
                          bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.2'))
+
+    # --- Calculate Center and Write Output ---
+    if corners_x:
+        # Use centroid of corners (polygon)
+        # corners_x has the first point repeated at the end, so exclude it
+        unique_corners_x = corners_x[:-1]
+        unique_corners_y = corners_y[:-1]
+        center_x = np.mean(unique_corners_x)
+        center_y = np.mean(unique_corners_y)
+    else:
+        # Fallback to wall points mean
+        final_x = []
+        final_y = []
+        for w in sorted_walls:
+            final_x.extend(w['x_points'])
+            final_y.extend(w['y_points'])
+        center_x = np.mean(final_x)
+        center_y = np.mean(final_y)
+
+    # Calculate Vector from Start to Center
+    dx = center_x - start_x
+    dy = center_y - start_y
+    
+    # Rotate back to original frame
+    orig_dx_list, orig_dy_list = rotate_points([dx], [dy], -total_rotation)
+    orig_dx = orig_dx_list[0]
+    orig_dy = orig_dy_list[0]
+    
+    target_dist = math.sqrt(orig_dx**2 + orig_dy**2)
+    target_angle_rad = math.atan2(orig_dy, orig_dx)
+    target_angle_deg = math.degrees(target_angle_rad)
+    
+    print(f"Target Center: Dist={target_dist:.2f} cm, Angle={target_angle_deg:.2f} deg")
+    
+    # Write to file
+    try:
+        with open("EX2/plots/CENTER.TXT", "w") as f:
+            f.write(f"{target_dist}\n")
+            f.write(f"{target_angle_deg}\n")
+        print("Successfully wrote EX2/plots/CENTER.TXT")
+    except Exception as e:
+        print(f"Failed to write CENTER.TXT: {e}")
 
     plt.title('Final Map: Aligned (Room Above Start)', fontsize=16)
     plt.xlabel('X (cm)')

@@ -7,6 +7,8 @@
 #define SOUND_SENSOR    S3
 
 // --- PHYSICAL CONSTANTS (cm) ---
+const float WHEEL_DIAMETER = 5.6;
+const float TRACK_WIDTH    = 12.1;
 const int TARGET_DISTANCE = 30;
 const int DEAD_ZONE = 2;
 const int BASE_SPEED = 50;
@@ -22,7 +24,7 @@ const float INTEGRAL_MAX = 300;
 // --- GLOBAL VARIABLES ---
 // Filter globals
 const int N = 3;
-const int WAIT_TIME_MS = 15000;
+const int WAIT_TIME_MS = 3000;
 int samples[N];
 
 // Navigation state globals
@@ -192,6 +194,9 @@ void ExecutePhase1() {
 
         Wait(40); // Loop timing
     }
+    Off(BOTH_MOTORS);
+    lineCount = 0; // Reset for next phase
+    wallHit = false; // Reset wall hit state
 }
 
 void waitForStartSignal() {
@@ -204,7 +209,7 @@ void waitForStartSignal() {
     TextOut(0, LCD_LINE2, "Waiting 15s...");
     
     // STEP 2: Mandatory Wait
-    Wait(3000);
+    Wait(WAIT_TIME_MS);
     
     // STEP 3: Wait for Time or Clap
     ClearScreen();
@@ -229,24 +234,100 @@ void waitForStartSignal() {
 }
 
 // ---------------------------------------------------------
-// 4. MAIN TASK
+// 4. PHASE 2: CENTER NAVIGATION
+// ---------------------------------------------------------
+
+void ExecutePhase2() {
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "PHASE 2: CENTER");
+    
+    byte handle;
+    unsigned int fsize;
+    string sDist="", sAngle="";
+    float dist = 0;
+    float angle = 0;
+    
+    // 1. Read File
+    if (OpenFileRead("CENTER.TXT", fsize, handle) != 0) { // LDR_SUCCESS = 0
+        PlaySound(SOUND_LOW_BEEP);
+        TextOut(0, LCD_LINE2, "FILE NOT FOUND");
+        Wait(5000);
+        return;
+    }
+    
+    short bytesRead;
+    ReadLnString(handle, sDist);
+    ReadLnString(handle, sAngle);
+
+    // hardcode for testing
+    // sDist = "103.94589068728564"; // cm
+    // sAngle = "-42.94466868368473"; // degrees
+    CloseFile(handle);
+    
+    dist = StrToNum(sDist);
+    angle = StrToNum(sAngle);
+    
+    TextOut(0, LCD_LINE2, "Dist: ");
+    TextOut(40, LCD_LINE2, sDist);
+    TextOut(0, LCD_LINE3, "Ang: ");
+    TextOut(40, LCD_LINE3, sAngle);
+    
+    Wait(2000);
+    
+    // 2. Calculate Motor Rotations
+    // Turn Angle
+    // Wheel rotation needed for turn = (Angle * TrackWidth) / WheelDiameter
+    float turnRotations = (angle * TRACK_WIDTH) / WHEEL_DIAMETER;
+    
+    // Drive Distance
+    // Wheel rotation needed for dist = (Dist / (PI * WheelDiameter)) * 360
+    float driveRotations = (dist / (3.14159 * WHEEL_DIAMETER)) * 360.0;
+    
+    // 3. Execute Turn
+    // RotateMotorEx(ports, speed, degrees, turnPct, sync, stop)
+    // turnPct = 100 means motors turn in opposite directions.
+    // Positive angle usually means turn right? Let's assume standard.
+    // If angle is positive (CCW in math?), robot turns Left?
+    // In NXC, RotateMotorEx with positive degrees and turnPct 100:
+    // If OUT_A is Right, OUT_B is Left.
+    // Usually positive degrees -> A fwd, B rev -> Left Turn.
+    // Python atan2 returns CCW angle (positive = Left).
+    // So positive angle -> Left Turn.
+    // So we use positive degrees.
+    
+    RotateMotorEx(BOTH_MOTORS, BASE_SPEED, turnRotations, 100, true, true);
+    Wait(500);
+    
+    // 4. Execute Drive
+    // turnPct = 0 means straight
+    RotateMotorEx(BOTH_MOTORS, BASE_SPEED, driveRotations, 0, true, true);
+    
+    // 5. Stop
+    Off(BOTH_MOTORS);
+    PlaySound(SOUND_DOWN);
+    TextOut(0, LCD_LINE4, "ARRIVED");
+}
+
+// ---------------------------------------------------------
+// 5. MAIN TASK
 // ---------------------------------------------------------
 
 task main()
 {
     // 1. Initialize Hardware and Vars
     SetupRobot();
-    Wait(1000);
+    Wait(300);
 
     // 2. Run Phase 1 (Find Start Point)
-    // ExecutePhase1();
+    ExecutePhase1();
+
 
     // 3. Wait for start signal (Clap/Time)
     waitForStartSignal();
 
     // 4. Run Phase 2 (Drive to center)
-    // ExecutePhase2(); // TODO: Implement this function
+    ExecutePhase2(); 
 
-    // drive straight for testing
-    OnFwd(BOTH_MOTORS, BASE_SPEED);
+    waitForStartSignal();
+    ExecutePhase1();
 }

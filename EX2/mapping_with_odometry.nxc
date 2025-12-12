@@ -9,7 +9,8 @@
 
 // --- PHYSICAL CONSTANTS (cm) ---
 const float WHEEL_DIAMETER = 5.6;
-const float TRACK_WIDTH    = 11.8;
+// const float TRACK_WIDTH    = 11.8;
+const float TRACK_WIDTH    = 12.1;
 
 // --- ODOMETRY VARIABLES ---
 float x_cm = 0.0;

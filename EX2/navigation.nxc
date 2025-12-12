@@ -1,0 +1,252 @@
+#define RIGHT_MOTOR     OUT_A
+#define LEFT_MOTOR      OUT_B
+#define BOTH_MOTORS     OUT_AB
+#define ULTRASONIC_SENSOR S4
+#define TOUCH_SENSOR    S1
+#define LIGHT_SENSOR    S2
+#define SOUND_SENSOR    S3
+
+// --- PHYSICAL CONSTANTS (cm) ---
+const int TARGET_DISTANCE = 30;
+const int DEAD_ZONE = 2;
+const int BASE_SPEED = 50;
+const int BLACK_THRESHOLD = 30;
+const int CLAP_THRESHOLD = 60;
+
+// --- PID CONSTANTS ---
+const float KP = 1.2;
+const float KI = 0.005;
+const float KD = 15.0;
+const float INTEGRAL_MAX = 300;
+
+// --- GLOBAL VARIABLES ---
+// Filter globals
+const int N = 3;
+const int WAIT_TIME_MS = 15000;
+int samples[N];
+
+// Navigation state globals
+int lineCount = 0;
+bool onLine = false;
+bool wallHit = false;
+
+// PID state globals
+float integral = 0;
+int lastError = 0;
+
+// ---------------------------------------------------------
+// 1. SENSOR & FILTER FUNCTIONS
+// ---------------------------------------------------------
+
+void SetupRobot() {
+    SetSensorLowspeed(ULTRASONIC_SENSOR);
+    SetSensorTouch(TOUCH_SENSOR);
+    SetSensorLight(LIGHT_SENSOR, true);
+    SetSensorSound(SOUND_SENSOR);
+
+    ResetTachoCount(LEFT_MOTOR);
+    ResetTachoCount(RIGHT_MOTOR);
+
+    // Initialize filter array with current reading
+    int initialDist = SensorUS(ULTRASONIC_SENSOR);
+    if (initialDist > 255) initialDist = 255;
+    
+    for (int i = 0; i < N; i++) {
+        samples[i] = initialDist;
+    }
+}
+
+int GetFilteredDistance() {
+    int raw = SensorUS(ULTRASONIC_SENSOR);
+    if (raw > 255) raw = 255; 
+
+    // Shift array
+    for (int i = N - 1; i > 0; i--) {
+        samples[i] = samples[i - 1];
+    }
+    samples[0] = raw;
+
+    // Calculate Average
+    int sum = 0;
+    for (int i = 0; i < N; i++) {
+        sum += samples[i];
+    }
+    return sum / N;
+}
+
+void CheckLine() {
+    // If we have already found the start, stop checking
+    if (lineCount >= 2) return;
+
+    if (Sensor(LIGHT_SENSOR) < BLACK_THRESHOLD) {
+        if (!onLine) {
+            lineCount++;
+            onLine = true;
+            PlaySound(SOUND_CLICK); 
+        }
+    } else {
+        // Hysteresis: Only reset if clearly white
+        if (Sensor(LIGHT_SENSOR) > BLACK_THRESHOLD + 5) {
+            onLine = false;
+        }
+    }
+    
+    // Display Update
+    string lineStr = "Lines: ";
+    lineStr = StrCat(lineStr, NumToStr(lineCount));
+    TextOut(0, LCD_LINE2, lineStr);
+}
+
+// ---------------------------------------------------------
+// 2. MOVEMENT & COLLISION FUNCTIONS
+// ---------------------------------------------------------
+
+void HandleWallCollision() {
+    Off(BOTH_MOTORS);
+    Wait(200);
+
+    // Back up and Turn
+    RotateMotor(BOTH_MOTORS, BASE_SPEED, -180);
+    Wait(200);
+    RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
+
+    // Update State
+    wallHit = true;
+    
+    // Reset PID Memory
+    integral = 0;
+    lastError = 0;
+    
+    // Re-prime the filter to avoid derivative spikes
+    int current = SensorUS(ULTRASONIC_SENSOR);
+    if (current > 255) current = 255;
+    for (int i = 0; i < N; i++) {
+        samples[i] = current;
+    }
+}
+
+void DrivePID() {
+    int distance = GetFilteredDistance();
+    int error = distance - TARGET_DISTANCE;
+    
+    // Dead zone
+    if (abs(error) < DEAD_ZONE) error = 0;
+
+    // Integral calculation with Anti-Windup
+    if (abs(error) < 15) {
+        integral += error;
+    } else {
+        integral = 0;
+    }
+
+    // Clamp Integral
+    if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
+    if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;
+
+    int derivative = error - lastError;
+
+    // Calculate Turn Ratio
+    float turnRatio = (KP * error) + (KI * integral) + (KD * derivative);
+
+    // Apply Motors
+    int leftSpeed  = BASE_SPEED - turnRatio;
+    int rightSpeed = BASE_SPEED + turnRatio;
+
+    // Safety Clamps
+    if (leftSpeed < 0) leftSpeed = 0;
+    if (rightSpeed < 0) rightSpeed = 0;
+    if (leftSpeed > 100) leftSpeed = 100;
+    if (rightSpeed > 100) rightSpeed = 100;
+
+    OnFwd(LEFT_MOTOR, leftSpeed);
+    OnFwd(RIGHT_MOTOR, rightSpeed);
+    
+    lastError = error;
+}
+
+// ---------------------------------------------------------
+// 3. PHASE LOGIC
+// ---------------------------------------------------------
+
+void ExecutePhase1() {
+    TextOut(0, LCD_LINE1, "Finding Start");
+    
+    while (lineCount < 2) {
+        CheckLine();
+
+        // High priority: Collision check
+        if (Sensor(TOUCH_SENSOR) == 1) {
+            HandleWallCollision();
+            continue; // Skip the rest of the loop to restart movement logic
+        }
+
+        // Movement Logic
+        if (!wallHit) {
+            // No wall hit yet? Just drive straight
+            OnFwd(LEFT_MOTOR, BASE_SPEED);
+            OnFwd(RIGHT_MOTOR, BASE_SPEED);
+        } else {
+            // Wall hit? Use PID
+            DrivePID();
+        }
+
+        Wait(40); // Loop timing
+    }
+}
+
+void waitForStartSignal() {
+    Off(BOTH_MOTORS); 
+    
+    // STEP 1: Signal found
+    PlaySound(SOUND_DOUBLE_BEEP);
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "START FOUND!");
+    TextOut(0, LCD_LINE2, "Waiting 15s...");
+    
+    // STEP 2: Mandatory Wait
+    Wait(3000);
+    
+    // STEP 3: Wait for Time or Clap
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "WAITING SIGNAL:");
+    TextOut(0, LCD_LINE2, "Clap OR 15s");
+    
+    long startTime = CurrentTick();
+    
+    while (CurrentTick() - startTime < WAIT_TIME_MS) {
+        if (Sensor(SOUND_SENSOR) > CLAP_THRESHOLD) {
+            TextOut(0, LCD_LINE4, "CLAP DETECTED!");
+            break; 
+        }
+        Wait(10);
+    }
+    
+    // STEP 4: Proceed
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "PHASE 2 START");
+    PlaySound(SOUND_UP);
+    Wait(1000);
+}
+
+// ---------------------------------------------------------
+// 4. MAIN TASK
+// ---------------------------------------------------------
+
+task main()
+{
+    // 1. Initialize Hardware and Vars
+    SetupRobot();
+    Wait(1000);
+
+    // 2. Run Phase 1 (Find Start Point)
+    // ExecutePhase1();
+
+    // 3. Wait for start signal (Clap/Time)
+    waitForStartSignal();
+
+    // 4. Run Phase 2 (Drive to center)
+    // ExecutePhase2(); // TODO: Implement this function
+
+    // drive straight for testing
+    OnFwd(BOTH_MOTORS, BASE_SPEED);
+}

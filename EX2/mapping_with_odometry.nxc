@@ -9,7 +9,6 @@
 
 // --- PHYSICAL CONSTANTS (cm) ---
 const float WHEEL_DIAMETER = 5.6;
-// const float TRACK_WIDTH    = 11.8;
 const float TRACK_WIDTH    = 12.1;
 
 // --- ODOMETRY VARIABLES ---
@@ -29,7 +28,7 @@ int logDistance[MAX_LOG_POINTS];
 
 int data_index = 0;
 int loop_counter = 0;
-#define LOG_INTERVAL 1     // Log every 5 PID cycles
+#define LOG_INTERVAL 5     // Log every 5 PID cycles
 
 byte fileHandle;
 
@@ -178,7 +177,7 @@ task main()
         int distance = GetFilteredDistance();
         // Log every Nth iteration
         loop_counter++;
-        if (loop_counter >= LOG_INTERVAL && lineCount>=2)
+        if (loop_counter >= LOG_INTERVAL && lineCount>=2)   // lineCount>=2 to make sure that fisrt point and last point are the same
         {
             if (data_index < MAX_LOG_POINTS)
             {
@@ -194,14 +193,14 @@ task main()
         // 0. CHECK FOR EXIT CONDITION
         if (lineCount >= 4) {
             Off(OUT_AB);
-            Wait(500); // Standard wait is fine here as we are done
+            Wait(500);
             break;
         }
 
         // 1. CHECK LINE IN MAIN LOOP
         CheckLine();
 
-        // --- 2. IMPROVEMENT: Encoder-Based Corner Recovery ---
+        // --- 2. Encoder-Based Corner Recovery ---
         if (Sensor(TOUCH_SENSOR) == 1) {
             Off(LEFT_MOTOR); Off(RIGHT_MOTOR);
             Wait(200);
@@ -259,9 +258,6 @@ task main()
         int leftSpeed  = BASE_SPEED - turnRatio;
         int rightSpeed = BASE_SPEED + turnRatio;
 
-        // --- 3. IMPROVEMENT: Removed Ramping "MAX_DELTA" ---
-        // Let the PID do the work. If it's too jerky, decrease KP or increase KD.
-
         // Absolute Safety Clamps
         if (leftSpeed < 0) leftSpeed = 0;
         if (rightSpeed < 0) rightSpeed = 0;
@@ -273,8 +269,6 @@ task main()
 
         lastError = error;
 
-        // --- 4. IMPROVEMENT: Slower Loop Time ---
-        // 40ms is better for US sensor stability
         Wait(40);
     }
     WriteLogToFile();

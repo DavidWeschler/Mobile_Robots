@@ -4,22 +4,18 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "EX2/plots/MAP_GOOD.TXT"
+FILE_NAME = "EX2/plots/MAP.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
 
-# Fix randomness to ensure consistent results on every run
+# Fix randomness
 random.seed(42)
 np.random.seed(42)
 
 # --- 1. Drift Correction ---
 
 def correct_odometry_drift(x_robot, y_robot):
-    """
-    Corrects odometry drift by forcing the last point to match the first point.
-    The error is distributed linearly across all points.
-    """
     drift_x = x_robot[-1] - x_robot[0]
     drift_y = y_robot[-1] - y_robot[0]
     num_points = len(x_robot)
@@ -28,16 +24,27 @@ def correct_odometry_drift(x_robot, y_robot):
     y_corrected = np.copy(y_robot)
     
     for i in range(num_points):
-        # Calculate correction factor (0.0 at start, 1.0 at end)
         factor = i / (num_points - 1)
-        
-        # Apply correction (subtract the accumulated drift)
         x_corrected[i] -= drift_x * factor
         y_corrected[i] -= drift_y * factor
         
     return x_corrected, y_corrected
 
 # --- 2. Math Helpers ---
+
+def rotate_points(x_arr, y_arr, angle_rad):
+    """ Rotates arrays of X and Y by a specific angle (radians) """
+    x_new = []
+    y_new = []
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    
+    for x, y in zip(x_arr, y_arr):
+        nx = x * cos_a - y * sin_a
+        ny = x * sin_a + y * cos_a
+        x_new.append(nx)
+        y_new.append(ny)
+    return x_new, y_new
 
 def get_line_params_from_2_points(p1, p2):
     x1, y1 = p1
@@ -55,35 +62,36 @@ def get_point_line_distances(x_vals, y_vals, A, B, C):
     if denominator == 0: return np.full_like(x, np.inf)
     return numerator / denominator
 
-# --- (LSQ) Least Squares Line Fitting using Pseudo-Inverse ---
 def fit_line_pseudo_inverse(x_points, y_points):
     x = np.array(x_points).reshape(-1, 1)
     y = np.array(y_points).reshape(-1, 1)
-    if np.std(x) < 0.01 * np.std(y): 
-        return float('inf'), np.mean(x)
+    if len(x) == 0: return 0, 0
+    if np.std(x) < 0.01 * np.std(y): return float('inf'), np.mean(x)
+    
     A = np.hstack([x, np.ones_like(x)])
-    A_pinv = np.linalg.pinv(A)  # uses SVD internally
-    p = A_pinv @ y  # matrix multiplication
-    return p[0][0], p[1][0]
+    try:
+        A_pinv = np.linalg.pinv(A)
+        p = A_pinv @ y
+        return p[0][0], p[1][0]
+    except:
+        return 0, 0
 
 def find_intersection(m1, c1, m2, c2):
-    # Handle parallel or vertical lines
     if m1 == float('inf') and m2 == float('inf'): return None
     if m1 == float('inf'): return c1, m2 * c1 + c2
     if m2 == float('inf'): return c2, m1 * c2 + c1
-    if abs(m1 - m2) < 1e-5: return None # Parallel
+    if abs(m1 - m2) < 1e-5: return None 
     
     x = (c2 - c1) / (m1 - m2)
     y = m1 * x + c1
     return x, y
 
-def extract_walls_ransac(x_all, y_all, max_distance=5, min_points=7, iterations=1000):
+def extract_walls_ransac(x_all, y_all, max_distance=5.0, min_points=7, iterations=1000):
     remaining_indices = list(range(len(x_all)))
     found_walls = []
     
     while len(remaining_indices) > min_points:
         best_inliers_indices = []
-        # RANSAC attempts to find a single line
         for _ in range(iterations):
             if len(remaining_indices) < 2: break
             sample_idx = random.sample(remaining_indices, 2)
@@ -97,7 +105,6 @@ def extract_walls_ransac(x_all, y_all, max_distance=5, min_points=7, iterations=
             curr_y = [y_all[i] for i in remaining_indices]
             dists = get_point_line_distances(curr_x, curr_y, A, B, C)
             
-            # Count inliers (points close to the line)
             current_inliers = []
             for i, d in enumerate(dists):
                 if d < max_distance:
@@ -105,23 +112,23 @@ def extract_walls_ransac(x_all, y_all, max_distance=5, min_points=7, iterations=
             
             if len(current_inliers) > len(best_inliers_indices):
                 best_inliers_indices = current_inliers
-                
-        # Save the found wall
+        
         wall_x = [x_all[i] for i in best_inliers_indices]
         wall_y = [y_all[i] for i in best_inliers_indices]
-        m, c = fit_line_pseudo_inverse(wall_x, wall_y) # (LSQ) Least Squares fit on inliers
+        m, c = fit_line_pseudo_inverse(wall_x, wall_y)
         
         found_walls.append({
             'm': m, 'c': c,
-            'x_points': wall_x, 'y_points': wall_y
+            'x_points': wall_x, 
+            'y_points': wall_y,
+            'indices': best_inliers_indices 
         })
         
-        # Remove inliers from the pool
         remaining_indices = [idx for idx in remaining_indices if idx not in best_inliers_indices]
         
     return found_walls
 
-# --- 3. Main Logic (with Geometric Sorting) ---
+# --- 3. Main Logic ---
 
 def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     
@@ -143,8 +150,7 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     print("Extracting Walls...")
     walls = extract_walls_ransac(x_wall, y_wall)
     
-    # --- Correcting Wall Order (GEOMETRIC SORT) ---
-    # Step A: Find the centroid (center of mass) of the entire map
+    # 4. Geometric Sort
     all_wall_x = []
     all_wall_y = []
     for w in walls:
@@ -154,36 +160,84 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     center_x = np.mean(all_wall_x)
     center_y = np.mean(all_wall_y)
     
-    # Step B: Calculate angle of each wall relative to the center
     for w in walls:
-        # Find the center of the specific wall
         wall_mid_x = np.mean(w['x_points'])
         wall_mid_y = np.mean(w['y_points'])
-        # Calculate angle (atan2 returns -pi to pi)
         w['angle_to_center'] = math.atan2(wall_mid_y - center_y, wall_mid_x - center_x)
     
-    # Step C: Sort walls by angle (ensures circular/clockwise order)
     sorted_walls = sorted(walls, key=lambda x: x['angle_to_center'])
     
+    # --- 5. TEMPORAL ALIGNMENT & ORIENTATION CHECK ---
+    anchor_wall = None
+    min_index_found = float('inf')
+    
+    for w in sorted_walls:
+        if not w['indices']: continue
+        earliest_idx_in_wall = min(w['indices'])
+        if earliest_idx_in_wall < min_index_found:
+            min_index_found = earliest_idx_in_wall
+            anchor_wall = w
+            
+    if anchor_wall:
+        print(f"Anchor wall found (Start Index: {min_index_found})")
+        m_anchor = anchor_wall['m']
+        
+        # Calculate initial rotation to make line horizontal
+        if m_anchor == float('inf'):
+            current_angle = math.pi / 2
+        else:
+            current_angle = math.atan(m_anchor)
+            
+        rotation_angle = -current_angle
+        
+        # 5a. Apply First Rotation (Horizontal Alignment)
+        all_x_temp = []
+        all_y_temp = []
+        
+        for w in sorted_walls:
+            rx, ry = rotate_points(w['x_points'], w['y_points'], rotation_angle)
+            w['x_points'] = rx
+            w['y_points'] = ry
+            all_x_temp.extend(rx)
+            all_y_temp.extend(ry)
+            
+        # 5b. Orientation Check (Upside Down Check)
+        # Calculate the Y-centroid of the whole map vs the Anchor Wall
+        map_centroid_y = np.mean(all_y_temp)
+        anchor_centroid_y = np.mean(anchor_wall['y_points'])
+        
+        # If the map centroid is BELOW the anchor wall, we are upside down.
+        # We want the room to be "above" (positive Y) the starting wall.
+        if map_centroid_y < anchor_centroid_y:
+            print("Map is upside down. Flipping 180 degrees...")
+            rotation_fix = math.pi # 180 degrees
+            
+            for w in sorted_walls:
+                rx, ry = rotate_points(w['x_points'], w['y_points'], rotation_fix)
+                w['x_points'] = rx
+                w['y_points'] = ry
+        
+        # 5c. Re-fit lines after all rotations
+        for w in sorted_walls:
+            nm, nc = fit_line_pseudo_inverse(w['x_points'], w['y_points'])
+            w['m'] = nm
+            w['c'] = nc
+
     # --- Plotting ---
     plt.figure(figsize=(10, 8))
     
-    # Plot original wall points
-    plt.plot(x_wall, y_wall, '.', color='lightgray', markersize=2, label='Points')
-    
-    lines = [] # Store lines in sorted order
-    
-    # Plot identified walls
+    lines = [] 
     colors = plt.cm.rainbow(np.linspace(0, 1, len(sorted_walls)))
+    
     for i, w in enumerate(sorted_walls):
         m, c = w['m'], w['c']
         lines.append((m, c))
         
-        # Plot wall points
         plt.plot(w['x_points'], w['y_points'], '.', color=colors[i], markersize=4)
         
-        # Plot fitted line
         wx = w['x_points']
+        if not wx: continue
+        
         if m != float('inf'):
             x_range = np.linspace(min(wx), max(wx), 10)
             y_range = m * x_range + c
@@ -197,7 +251,6 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     
     if len(lines) >= 3:
         for i in range(len(lines)):
-            # Connect wall i to wall i+1 (modulo length to close loop)
             l1 = lines[i]
             l2 = lines[(i + 1) % len(lines)]
             
@@ -206,13 +259,11 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
                 corners_x.append(res[0])
                 corners_y.append(res[1])
         
-        # Close the shape on the graph
         if corners_x:
             corners_x.append(corners_x[0])
             corners_y.append(corners_y[0])
             plt.plot(corners_x, corners_y, 'k--', linewidth=2, marker='o', markersize=8, markerfacecolor='yellow', label='Closed Map')
             
-            # Add length labels
             for i in range(len(corners_x) - 1):
                 p1_x, p1_y = corners_x[i], corners_y[i]
                 p2_x, p2_y = corners_x[i+1], corners_y[i+1]
@@ -223,7 +274,7 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
                 plt.text(mid_x, mid_y, f"{dist:.1f}", fontsize=9, fontweight='bold',
                          bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.2'))
 
-    plt.title('Final Map: Drift Correction + Geometric Sort', fontsize=16)
+    plt.title('Final Map: Aligned (Room Above Start)', fontsize=16)
     plt.xlabel('X (cm)')
     plt.ylabel('Y (cm)')
     plt.axis('equal')

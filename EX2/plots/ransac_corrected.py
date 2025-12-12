@@ -4,7 +4,7 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "EX2/plots/MAP_GOOD.TXT"
+FILE_NAME = "EX2/plots/MAP.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
@@ -131,44 +131,36 @@ def extract_walls_ransac(x_all, y_all, max_distance=5.0, min_points=7, iteration
 # --- 3. Main Logic ---
 
 def calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start_y, total_rotation):
+    unique_corners_x = []
+    unique_corners_y = []
+
     if corners_x:
         # Use centroid of corners (polygon)
         # corners_x has the first point repeated at the end, so exclude it
         unique_corners_x = corners_x[:-1]
         unique_corners_y = corners_y[:-1]
-        center_x = np.mean(unique_corners_x)
-        center_y = np.mean(unique_corners_y)
-    else:
-        # Fallback to wall points mean
-        final_x = []
-        final_y = []
-        for w in sorted_walls:
-            final_x.extend(w['x_points'])
-            final_y.extend(w['y_points'])
-        center_x = np.mean(final_x)
-        center_y = np.mean(final_y)
-
-    # Calculate Vector from Start to Center
-    dx = center_x - start_x
-    dy = center_y - start_y
     
-    # Rotate back to original frame
-    orig_dx_list, orig_dy_list = rotate_points([dx], [dy], -total_rotation)
-    orig_dx = orig_dx_list[0]
-    orig_dy = orig_dy_list[0]
+    # Prepare list of corners relative to start (0,0) and original orientation
+    final_corners = []
     
-    target_dist = math.sqrt(orig_dx**2 + orig_dy**2)
-    target_angle_rad = math.atan2(orig_dy, orig_dx)
-    target_angle_deg = math.degrees(target_angle_rad)
-    
-    print(f"Target Center: Dist={target_dist:.2f} cm, Angle={target_angle_deg:.2f} deg")
+    if unique_corners_x:
+        for cx, cy in zip(unique_corners_x, unique_corners_y):
+            # Vector from start
+            dx = cx - start_x
+            dy = cy - start_y
+            
+            # Rotate back
+            rx_list, ry_list = rotate_points([dx], [dy], -total_rotation)
+            final_corners.append((rx_list[0], ry_list[0]))
     
     # Write to file
     try:
         with open("EX2/plots/CENTER.TXT", "w") as f:
-            f.write(f"{target_dist}\n")
-            f.write(f"{target_angle_deg}\n")
-        print("Successfully wrote EX2/plots/CENTER.TXT")
+            f.write(f"{len(final_corners)}\n")
+            for x, y in final_corners:
+                f.write(f"{x}\n")
+                f.write(f"{y}\n")
+        print(f"Successfully wrote EX2/plots/CENTER.TXT with {len(final_corners)} corners")
     except Exception as e:
         print(f"Failed to write CENTER.TXT: {e}")
 

@@ -115,7 +115,7 @@ def extract_walls_ransac(x_all, y_all, max_distance=5.0, min_points=7, iteration
         
         wall_x = [x_all[i] for i in best_inliers_indices]
         wall_y = [y_all[i] for i in best_inliers_indices]
-        m, c = fit_line_pseudo_inverse(wall_x, wall_y)
+        m, c = fit_line_pseudo_inverse(wall_x, wall_y)  # (LSQ) Least Squares fit on inliers
         
         found_walls.append({
             'm': m, 'c': c,
@@ -129,6 +129,48 @@ def extract_walls_ransac(x_all, y_all, max_distance=5.0, min_points=7, iteration
     return found_walls
 
 # --- 3. Main Logic ---
+
+def calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start_y, total_rotation):
+    if corners_x:
+        # Use centroid of corners (polygon)
+        # corners_x has the first point repeated at the end, so exclude it
+        unique_corners_x = corners_x[:-1]
+        unique_corners_y = corners_y[:-1]
+        center_x = np.mean(unique_corners_x)
+        center_y = np.mean(unique_corners_y)
+    else:
+        # Fallback to wall points mean
+        final_x = []
+        final_y = []
+        for w in sorted_walls:
+            final_x.extend(w['x_points'])
+            final_y.extend(w['y_points'])
+        center_x = np.mean(final_x)
+        center_y = np.mean(final_y)
+
+    # Calculate Vector from Start to Center
+    dx = center_x - start_x
+    dy = center_y - start_y
+    
+    # Rotate back to original frame
+    orig_dx_list, orig_dy_list = rotate_points([dx], [dy], -total_rotation)
+    orig_dx = orig_dx_list[0]
+    orig_dy = orig_dy_list[0]
+    
+    target_dist = math.sqrt(orig_dx**2 + orig_dy**2)
+    target_angle_rad = math.atan2(orig_dy, orig_dx)
+    target_angle_deg = math.degrees(target_angle_rad)
+    
+    print(f"Target Center: Dist={target_dist:.2f} cm, Angle={target_angle_deg:.2f} deg")
+    
+    # Write to file
+    try:
+        with open("EX2/plots/CENTER.TXT", "w") as f:
+            f.write(f"{target_dist}\n")
+            f.write(f"{target_angle_deg}\n")
+        print("Successfully wrote EX2/plots/CENTER.TXT")
+    except Exception as e:
+        print(f"Failed to write CENTER.TXT: {e}")
 
 def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     
@@ -235,7 +277,7 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
         
         # 5c. Re-fit lines after all rotations
         for w in sorted_walls:
-            nm, nc = fit_line_pseudo_inverse(w['x_points'], w['y_points'])
+            nm, nc = fit_line_pseudo_inverse(w['x_points'], w['y_points'])  # (LSQ) Least Squares fit on inliers
             w['m'] = nm
             w['c'] = nc
 
@@ -291,46 +333,7 @@ def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
                          bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.2'))
 
     # --- Calculate Center and Write Output ---
-    if corners_x:
-        # Use centroid of corners (polygon)
-        # corners_x has the first point repeated at the end, so exclude it
-        unique_corners_x = corners_x[:-1]
-        unique_corners_y = corners_y[:-1]
-        center_x = np.mean(unique_corners_x)
-        center_y = np.mean(unique_corners_y)
-    else:
-        # Fallback to wall points mean
-        final_x = []
-        final_y = []
-        for w in sorted_walls:
-            final_x.extend(w['x_points'])
-            final_y.extend(w['y_points'])
-        center_x = np.mean(final_x)
-        center_y = np.mean(final_y)
-
-    # Calculate Vector from Start to Center
-    dx = center_x - start_x
-    dy = center_y - start_y
-    
-    # Rotate back to original frame
-    orig_dx_list, orig_dy_list = rotate_points([dx], [dy], -total_rotation)
-    orig_dx = orig_dx_list[0]
-    orig_dy = orig_dy_list[0]
-    
-    target_dist = math.sqrt(orig_dx**2 + orig_dy**2)
-    target_angle_rad = math.atan2(orig_dy, orig_dx)
-    target_angle_deg = math.degrees(target_angle_rad)
-    
-    print(f"Target Center: Dist={target_dist:.2f} cm, Angle={target_angle_deg:.2f} deg")
-    
-    # Write to file
-    try:
-        with open("EX2/plots/CENTER.TXT", "w") as f:
-            f.write(f"{target_dist}\n")
-            f.write(f"{target_angle_deg}\n")
-        print("Successfully wrote EX2/plots/CENTER.TXT")
-    except Exception as e:
-        print(f"Failed to write CENTER.TXT: {e}")
+    calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start_y, total_rotation)
 
     plt.title('Final Map: Aligned (Room Above Start)', fontsize=16)
     plt.xlabel('X (cm)')

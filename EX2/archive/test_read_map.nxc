@@ -1,0 +1,236 @@
+#define MAP_FILE "CORNERS.TXT"
+#define MAX_CORNERS 10
+#define ULTRASONIC_SENSOR S4
+
+// Corner data storage
+float cornerX[MAX_CORNERS];
+float cornerY[MAX_CORNERS];
+int numCorners = 0;
+
+// Read corners from file
+bool ReadMapFile() {
+    byte fileHandle;
+    unsigned int fileSize;
+    
+    // Open file
+    if (OpenFileRead(MAP_FILE, fileSize, fileHandle) != NO_ERR) {
+        TextOut(0, LCD_LINE1, "File not found");
+        PlayTone(440, 500);
+        Wait(3000);
+        return false;
+    }
+    
+    TextOut(0, LCD_LINE1, "Reading file...");
+    
+    // Read file contents
+    string fileContent = "";
+    string line = "";
+    
+    while (true) {
+        ReadLnString(fileHandle, line);
+        if (line == "") break;  // End of file
+        
+        // Parse line: "x,y"
+        // Find comma position
+        int commaPos = 0;
+        for (int i = 0; i < StrLen(line); i++) {
+            if (SubStr(line, i, 1) == ",") {
+                commaPos = i;
+                break;
+            }
+        }
+        
+        if (commaPos > 0 && numCorners < MAX_CORNERS) {
+            // Extract x and y strings
+            string xStr = SubStr(line, 0, commaPos);
+            string yStr = SubStr(line, commaPos + 1, StrLen(line) - commaPos - 1);
+            
+            // Convert to float (scale by 100 in file, divide here)
+            long xScaled = StrToNum(xStr);
+            long yScaled = StrToNum(yStr);
+            
+            cornerX[numCorners] = xScaled / 100.0;
+            cornerY[numCorners] = yScaled / 100.0;
+            
+            numCorners++;
+        }
+    }
+    
+    CloseFile(fileHandle);
+    return true;
+}
+
+// Calculate centroid (center) of polygon - returns X coordinate
+float CalculateCenterX() {
+    float cx = 0.0;
+    
+    if (numCorners == 0) return 0.0;
+    
+    for (int i = 0; i < numCorners; i++) {
+        cx += cornerX[i];
+    }
+    
+    return cx / numCorners;
+}
+
+// Calculate centroid (center) of polygon - returns Y coordinate
+float CalculateCenterY() {
+    float cy = 0.0;
+    
+    if (numCorners == 0) return 0.0;
+    
+    for (int i = 0; i < numCorners; i++) {
+        cy += cornerY[i];
+    }
+    
+    return cy / numCorners;
+}
+
+// Integer square root (NXT doesn't have sqrt)
+int isqrt(long n) {
+    if (n <= 0) return 0;
+    long x = n;
+    long y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+task main() {
+    SetSensorLowspeed(ULTRASONIC_SENSOR);
+    Wait(100);
+    ClearScreen();
+    
+    // Read map file
+    if (!ReadMapFile()) {
+        TextOut(0, LCD_LINE2, "Upload file:");
+        TextOut(0, LCD_LINE3, MAP_FILE);
+        TextOut(0, LCD_LINE4, "Format: x,y");
+        TextOut(0, LCD_LINE5, "(scaled x100)");
+        Wait(10000);
+        Stop(true);
+    }
+    
+    // Calculate center
+    float centerX = CalculateCenterX();
+    float centerY = CalculateCenterY();
+    
+    // Get current position (x=0, y from ultrasonic)
+    float currentX = 0.0;
+    float currentY = SensorUS(ULTRASONIC_SENSOR);
+    
+    // Calculate distance to center
+    float dx = centerX - currentX;
+    float dy = centerY - currentY;
+    
+    long dx_100 = dx * 100;
+    long dy_100 = dy * 100;
+    long dist_sq = (dx_100 * dx_100 + dy_100 * dy_100);
+    float distance = isqrt(dist_sq) / 100.0;
+    
+    // Calculate angle to center using atan2
+    float angle_rad = atan2(dy, dx);
+    float angle_deg = angle_rad * 57.2958;  // Convert to degrees (180/π)
+    
+    // Robot is facing negative x direction (180°)
+    // Calculate turn angle relative to current heading
+    float robot_heading = 180.0;  // Facing negative x
+    float turn_angle = angle_deg - robot_heading;
+    
+    // Normalize turn angle to [-180, 180]
+    while (turn_angle > 180.0) turn_angle -= 360.0;
+    while (turn_angle < -180.0) turn_angle += 360.0;
+    
+    // Display results
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "Map loaded!");
+    
+    string s = "Corners: ";
+    s = StrCat(s, NumToStr(numCorners));
+    TextOut(0, LCD_LINE2, s);
+    
+    // Display center with proper decimal formatting
+    long cx_int = centerX;
+    long cx_dec = abs((centerX - cx_int) * 100);
+    
+    s = "CX: ";
+    s = StrCat(s, NumToStr(cx_int));
+    s = StrCat(s, ".");
+    if (cx_dec < 10) s = StrCat(s, "0");  // Leading zero
+    s = StrCat(s, NumToStr(cx_dec));
+    TextOut(0, LCD_LINE3, s);
+    
+    long cy_int = centerY;
+    long cy_dec = abs((centerY - cy_int) * 100);
+    
+    s = "CY: ";
+    s = StrCat(s, NumToStr(cy_int));
+    s = StrCat(s, ".");
+    if (cy_dec < 10) s = StrCat(s, "0");  // Leading zero
+    s = StrCat(s, NumToStr(cy_dec));
+    TextOut(0, LCD_LINE4, s);
+    
+    PlayTone(1000, 500);
+    Wait(3000);
+    
+    // Display current position and navigation info
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "Current Pos:");
+    
+    s = "X: 0.00";
+    TextOut(0, LCD_LINE2, s);
+    
+    s = "Y: ";
+    s = StrCat(s, NumToStr(currentY));
+    TextOut(0, LCD_LINE3, s);
+    
+    Wait(2000);
+    
+    // Display distance and angle to center
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "To Center:");
+    
+    long dist_int = distance;
+    long dist_dec = abs((distance - dist_int) * 100);
+    s = "Dist: ";
+    s = StrCat(s, NumToStr(dist_int));
+    s = StrCat(s, ".");
+    if (dist_dec < 10) s = StrCat(s, "0");
+    s = StrCat(s, NumToStr(dist_dec));
+    s = StrCat(s, " cm");
+    TextOut(0, LCD_LINE2, s);
+    
+    long angle_int = turn_angle;
+    s = "Turn: ";
+    s = StrCat(s, NumToStr(angle_int));
+    s = StrCat(s, " deg");
+    TextOut(0, LCD_LINE3, s);
+    
+    s = "(- = right)";
+    TextOut(0, LCD_LINE4, s);
+    
+    PlayTone(1500, 300);
+    
+    // Display individual corners
+    Wait(3000);
+    for (int i = 0; i < numCorners; i++) {
+        ClearScreen();
+        s = "Corner ";
+        s = StrCat(s, NumToStr(i));
+        TextOut(0, LCD_LINE1, s);
+        
+        s = "X: ";
+        s = StrCat(s, NumToStr(cornerX[i]));
+        TextOut(0, LCD_LINE2, s);
+        
+        s = "Y: ";
+        s = StrCat(s, NumToStr(cornerY[i]));
+        TextOut(0, LCD_LINE3, s);
+        
+        Wait(1500);
+    }
+    
+    Wait(5000);
+}

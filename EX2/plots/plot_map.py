@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import math
 
 # --- Configuration matching the NXC code ---
-FILE_NAME = "EX2/plots/MAP.TXT"
+FILE_NAME = "MAP.TXT"
 
 # Scaling factors used in the NXC code (to convert float to long/int)
 X_Y_SCALE = 10000.0  # x_cm and y_cm were multiplied by 10000

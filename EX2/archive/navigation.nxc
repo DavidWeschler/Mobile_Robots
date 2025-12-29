@@ -7,7 +7,7 @@
 #define SOUND_SENSOR    S3
 
 // --- PHYSICAL CONSTANTS (cm) ---
-const float WHEEL_DIAMETER = 5.7;
+const float WHEEL_DIAMETER = 5.6;
 const float TRACK_WIDTH    = 12.1;
 const int TARGET_DISTANCE = 30;
 const int DEAD_ZONE = 2;
@@ -24,7 +24,7 @@ const float INTEGRAL_MAX = 300;
 // --- GLOBAL VARIABLES ---
 // Filter globals
 const int N = 3;
-const int WAIT_TIME_MS = 5000; //15000
+const int WAIT_TIME_MS = 3000;
 int samples[N];
 
 // Navigation state globals
@@ -205,25 +205,16 @@ void waitForStartSignal() {
     // STEP 1: Signal found
     PlaySound(SOUND_DOUBLE_BEEP);
     ClearScreen();
-
-    string msg = "Waiting ";
-    msg = StrCat(msg, NumToStr(WAIT_TIME_MS / 1000));
-    msg = StrCat(msg, "s");
-
     TextOut(0, LCD_LINE1, "START FOUND!");
-    TextOut(0, LCD_LINE2, msg);
+    TextOut(0, LCD_LINE2, "Waiting 15s...");
     
     // STEP 2: Mandatory Wait
     Wait(WAIT_TIME_MS);
     
     // STEP 3: Wait for Time or Clap
-    msg = "clap or ";
-    msg = StrCat(msg, NumToStr(WAIT_TIME_MS / 1000));
-    msg = StrCat(msg, "s");
-
     ClearScreen();
     TextOut(0, LCD_LINE1, "WAITING SIGNAL:");
-    TextOut(0, LCD_LINE2, msg);
+    TextOut(0, LCD_LINE2, "Clap OR 15s");
     
     long startTime = CurrentTick();
     
@@ -276,36 +267,21 @@ void ExecutePhase2() {
     if (numCorners <= 0) {
         TextOut(0, LCD_LINE2, "NO CORNERS");
         CloseFile(handle);
+        Wait(5000);
         return;
     }
-
-    float minX, maxX, minY, maxY;
 
     for (int i=0; i<numCorners; i++) {
         string sX, sY;
         ReadLnString(handle, sX);
         ReadLnString(handle, sY);
-
-
-        float curX = StrToNum(sX);
-        float curY = StrToNum(sY);
-        
-        if (i == 0) {
-            minX = curX;
-            maxX = curX;
-            minY = curY;
-            maxY = curY;
-        } else {
-            if (curX < minX) minX = curX;
-            if (curX > maxX) maxX = curX;
-            if (curY < minY) minY = curY;
-            if (curY > maxY) maxY = curY;
-        }
+        sumX += StrToNum(sX);
+        sumY += StrToNum(sY);
     }
     CloseFile(handle);
     
-    float centerX = (minX + maxX) / 2.0;
-    float centerY = (minY + maxY) / 2.0;
+    float centerX = sumX / numCorners;
+    float centerY = sumY / numCorners;
     
     float dist = sqrt(centerX*centerX + centerY*centerY);
     float angle = atan2(centerY, centerX); // Radians
@@ -459,11 +435,11 @@ task main()
     Wait(300);
 
     // 2. Run Phase 1 (Find Start Point)
-    ExecutePhase1();
+    // ExecutePhase1();
 
 
     // 3. Wait for start signal (Clap/Time)
-    waitForStartSignal();
+    // waitForStartSignal();
 
     // 4. Run Phase 2 (Drive to center)
     ExecutePhase2(); 

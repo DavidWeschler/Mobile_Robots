@@ -4,7 +4,7 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "EX2/plots/MAP_GOOD.TXT"
+FILE_NAME = "MAP.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 

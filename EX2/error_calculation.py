@@ -80,12 +80,14 @@ measured_lengths = compute_edge_lengths(measured_vertices)
 true_angles = compute_angles(true_vertices)
 measured_angles = compute_angles(measured_vertices)
 
-length_error = mean_absolute_error(measured_lengths, true_lengths)
-angle_error = mean_absolute_error(measured_angles, true_angles)
+length_error_abs = mean_absolute_error(measured_lengths, true_lengths)
+length_error_percent = (length_error_abs / np.mean(true_lengths)) * 100
+angle_error_abs = mean_absolute_error(measured_angles, true_angles)
+angle_error_percent = (angle_error_abs / np.mean(true_angles)) * 100
 
 print("=== Accuracy Results ===")
-print(f"Mean Edge Length Error: {length_error:.2f} cm")
-print(f"Mean Angle Error: {angle_error:.2f} degrees")
+print(f"Mean Edge Length Error: {length_error_percent:.2f}%")
+print(f"Mean Angle Error: {angle_error_percent:.2f}%")
 
 
 def plot_polygon(vertices, label, style):
@@ -100,7 +102,7 @@ plt.axis("equal")
 plt.grid(True)
 plt.legend()
 plt.title("True Shape vs Measured Shape")
-plt.suptitle(f"Mean Edge Length Error: {length_error:.2f} cm | Mean Angle Error: {angle_error:.2f}°", 
+plt.suptitle(f"Mean Edge Length Error: {length_error_percent:.2f}% | Mean Angle Error: {angle_error_percent:.2f}%", 
              fontsize=10, y=0.96)
 plt.xlabel("X [cm]")
 plt.ylabel("Y [cm]")

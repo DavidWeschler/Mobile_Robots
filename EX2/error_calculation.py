@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-FILE_PATH = "CENTER.TXT"
+FILE_PATH = "plots/CENTER.TXT"
 
 # Updated to 5 vertices to match measured data
 true_vertices = np.array([
@@ -56,7 +56,7 @@ def mean_absolute_error(a, b):
 def rotate_to_align_base(vertices):
     """Rotate vertices so the first edge (base) is parallel to x-axis."""
     # Calculate angle of first edge (from vertex 2 to vertex 3)
-    edge = vertices[3] - vertices[2]
+    edge = vertices[4] - vertices[3]
     angle = np.arctan2(edge[1], edge[0])
     
     # Create rotation matrix to rotate by -angle (to make horizontal)

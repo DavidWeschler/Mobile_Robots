@@ -24,7 +24,7 @@ const float INTEGRAL_MAX = 300;
 // --- GLOBAL VARIABLES ---
 // Filter globals
 const int N = 3;
-const int WAIT_TIME_MS = 5000; //15000
+const int WAIT_TIME_MS = 15000; //15000
 int samples[N];
 
 // Navigation state globals
@@ -279,6 +279,7 @@ void ExecutePhase2() {
         return;
     }
 
+    // Find bounding box
     float minX, maxX, minY, maxY;
 
     for (int i=0; i<numCorners; i++) {
@@ -347,106 +348,6 @@ void ExecutePhase2() {
     PlaySound(SOUND_DOWN);
     TextOut(0, LCD_LINE4, "ARRIVED");
 }
-
-// for irregular shapes
-void ExecutePhase2_ver2() {
-    ClearScreen();
-    TextOut(0, LCD_LINE1, "PHASE 2: CENTER");
-    
-    byte handle;
-    unsigned int fsize;
-    string sLine="";
-    int numCorners = 0;
-
-    // arrays to store all corners
-    float X[50];
-    float Y[50];
-    
-    // 1. Read File
-    if (OpenFileRead("CENTER.TXT", fsize, handle) != 0) {
-        PlaySound(SOUND_LOW_BEEP);
-        TextOut(0, LCD_LINE2, "FILE NOT FOUND");
-        Wait(5000);
-        return;
-    }
-    
-    // Read number of corners
-    if (ReadLnString(handle, sLine) != 0) {
-        CloseFile(handle);
-        return;
-    }
-    numCorners = StrToNum(sLine);
-    
-    if (numCorners <= 0) {
-        TextOut(0, LCD_LINE2, "NO CORNERS");
-        CloseFile(handle);
-        Wait(5000);
-        return;
-    }
-
-    // Read all corners into arrays
-    for (int i=0; i<numCorners; i++) {
-        string sX, sY;
-        ReadLnString(handle, sX);
-        ReadLnString(handle, sY);
-        X[i] = StrToNum(sX);
-        Y[i] = StrToNum(sY);
-    }
-    CloseFile(handle);
-    
-    // ---------- Compute centroid using shoelace formula ----------
-    float A = 0.0;
-    float Cx = 0.0;
-    float Cy = 0.0;
-
-    for (int i=0; i<numCorners; i++) {
-        int j = (i + 1) % numCorners; // next vertex (wrap-around)
-        
-        float cross = X[i] * Y[j] - X[j] * Y[i];
-        A  += cross;
-        Cx += (X[i] + X[j]) * cross;
-        Cy += (Y[i] + Y[j]) * cross;
-    }
-
-    A = A / 2.0;
-    Cx = Cx / (6.0 * A);
-    Cy = Cy / (6.0 * A);
-    // -------------------------------------------------------------
-
-    float centerX = Cx;
-    float centerY = Cy;
-
-    float dist = sqrt(centerX*centerX + centerY*centerY);
-    float angle = atan2(centerY, centerX); // Radians
-    angle = (angle * 180.0) / 3.14159; // Degrees
-    
-    string sDist = NumToStr(dist);
-    string sAngle = NumToStr(angle);
-    
-    TextOut(0, LCD_LINE2, "Dist: ");
-    TextOut(40, LCD_LINE2, sDist);
-    TextOut(0, LCD_LINE3, "Ang: ");
-    TextOut(40, LCD_LINE3, sAngle);
-    
-    Wait(2000);
-    
-    // 2. Calculate Motor Rotations
-    float turnRotations = (angle * TRACK_WIDTH) / WHEEL_DIAMETER;
-    float driveRotations = (dist / (3.14159 * WHEEL_DIAMETER)) * 360.0;
-    
-    // 3. Execute Turn
-    RotateMotorEx(BOTH_MOTORS, BASE_SPEED, turnRotations, 100, true, true);
-    Wait(500);
-    
-    // 4. Execute Drive
-    RotateMotorEx(BOTH_MOTORS, BASE_SPEED, driveRotations, 0, true, true);
-    
-    // 5. Stop
-    Off(BOTH_MOTORS);
-    PlaySound(SOUND_DOWN);
-    TextOut(0, LCD_LINE4, "ARRIVED");
-}
-
 
 // ---------------------------------------------------------
 // 5. MAIN TASK

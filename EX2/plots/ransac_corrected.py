@@ -4,7 +4,7 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "MAP.TXT"
+FILE_NAME = "EX2\plots\MAP.TXT"
 X_Y_SCALE = 10000.0
 THETA_SCALE = 100000.0
 SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
@@ -140,18 +140,21 @@ def calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start
         unique_corners_x = corners_x[:-1]
         unique_corners_y = corners_y[:-1]
     
-    # Prepare list of corners relative to start (0,0) and original orientation
+    # Prepare list of corners relative to start (0,0) in robot's reference frame
+    # Robot starts at origin facing NEGATIVE X axis, so we:
+    # 1. Compute offset from start position (both in aligned/rotated frame)
+    # 2. Rotate by 180° (negate both) since robot faces -X, not +X
     final_corners = []
     
     if unique_corners_x:
         for cx, cy in zip(unique_corners_x, unique_corners_y):
-            # Vector from start
+            # Vector from start (in aligned frame)
             dx = cx - start_x
             dy = cy - start_y
             
-            # Rotate back
-            rx_list, ry_list = rotate_points([dx], [dy], -total_rotation)
-            final_corners.append((rx_list[0], ry_list[0]))
+            # Robot faces negative X, so rotate 180° to robot's frame
+            # Rotation by π: (x, y) -> (-x, -y)
+            final_corners.append((-dx, -dy))
     
     # Write to file
     try:

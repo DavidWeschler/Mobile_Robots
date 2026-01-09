@@ -1,0 +1,95 @@
+================================================================================
+REVISED ROADMAP: Mobile Robots Project
+Strategy: "Safe Grade First" (Option 1) -> "Bonus Upgrade" (Option 6)
+================================================================================
+
+################################################################################
+STAGE 1: THE CORE ROBOT (Option 1 - Differential Drive)
+Target: Fully functional robot, basic odometry, and data logging.
+Status: Ready for submission (Grade capped at 70).
+################################################################################
+
+PHASE 1.1: HARDWARE CONSTRUCTION
+--------------------------------------------------------------------------------
+1. [cite_start]Chassis Build (Differential Drive) [cite: 25]
+   - [ ] Build a simple base with 2 motors driving 2 wheels directly.
+   - [ ] Add a passive caster wheel (ball or swivel) for stability.
+   - [ ] Measure and record exact dimensions:
+         * Wheel Diameter (R)
+         * Track Width (L) - distance between centers of the two wheels.
+
+2. [cite_start]Sensor Installation (Compulsory) [cite: 6, 15]
+   - [ ] Distance Sensor: Mount facing forward (or on a turret if preferred).
+   - [ ] Touch Sensors (x2): Mount one bumper front, one bumper rear.
+   - [ ] Light Sensor: Mount facing down (optional usage, but required on robot).
+
+PHASE 1.2: BASIC BEHAVIOR & MOVEMENT
+--------------------------------------------------------------------------------
+1. [cite_start]Drive Logic [cite: 14]
+   - [ ] Implement a movement strategy (e.g., drive straight until obstacle).
+   - [ ] [cite_start]Implement "Escape Maneuvers"[cite: 17]:
+         * If Front Touch -> Stop, Backup, Turn.
+         * If Rear Touch -> Stop, Forward.
+
+2. [cite_start]Odometry (Internal) [cite: 18, 26]
+   - [ ] Write the Differential Drive kinematics equations in your code.
+   - [ ] Calculate X, Y, and Theta (heading) in real-time based on motor encoders.
+   - [ ] [cite_start]Display X, Y on the robot's LCD screen[cite: 19].
+
+PHASE 1.3: DATA LOGGING & EXPORT
+--------------------------------------------------------------------------------
+1. [cite_start]The Black Box [cite: 23]
+   - [ ] Create a data logging function.
+   - [ ] Log format: [Time, X_odom, Y_odom, Sensor_Dist].
+   - [ ] [cite_start]Ensure logging stops automatically after <10 minutes[cite: 22].
+   - [ ] Verify you can export this file to a PC (USB/Bluetooth).
+
+2. Validation Drive
+   - [ ] Run the robot in a closed arena.
+   - [ ] Check if the LCD coordinates roughly match reality (expect some drift).
+   - [ ] *Checkpoint:* At this step, you have finished Option 1.
+
+################################################################################
+STAGE 2: THE CAMERA UPGRADE (Option 6 - Visual SLAM)
+Target: Add external camera to correct odometry drift and rectify the map.
+Status: Aiming for Bonus (Grade up to 110 total).
+################################################################################
+
+PHASE 2.1: VISION SYSTEM SETUP
+--------------------------------------------------------------------------------
+1. [cite_start]Physical Setup [cite: 38]
+   - [ ] Mount a webcam/phone high above the arena (static position).
+   - [ ] Add a distinct visual marker to your robot (e.g., large pink circle) for easier tracking.
+
+2. [cite_start]Calibration (Empty Arena) [cite: 39]
+   - [ ] Take a picture of the empty arena.
+   - [ ] Write a script to detect the 4 corners/walls in this image (Pixel Coordinates).
+
+PHASE 2.2: DUAL DATA COLLECTION
+--------------------------------------------------------------------------------
+1. The "Bonus Run"
+   - [ ] Start the Camera recording on PC.
+   - [ ] Start the Robot (running the code from Stage 1).
+   - [ ] Robot drives and logs its internal Odometry (X, Y).
+   - [ ] Camera records the visual path (Pixels U, V).
+
+PHASE 2.3: SOFTWARE FUSION (SLAM)
+--------------------------------------------------------------------------------
+1. [cite_start]Visual Tracking [cite: 42]
+   - [ ] Process the video: Track the robot's marker to get a list of (U, V) coordinates over time.
+
+2. [cite_start]Homography Calculation [cite: 42]
+   - [ ] Match the Robot Path (Stage 1 data) with Camera Path (Visual data).
+   - [ ] Calculate the 3x3 Homography Matrix (H).
+
+3. [cite_start]Map Rectification [cite: 43]
+   - [ ] Use H to transform the "Pixel Walls" (from Phase 2.1) into "Meter Walls".
+   - [ ] Plot the final map: Real Walls + Corrected Robot Path.
+
+PHASE 2.4: FINAL REPORTING
+--------------------------------------------------------------------------------
+1. [cite_start]Deliverables [cite: 48-53]
+   - [ ] Document the Stage 1 robot build.
+   - [ ] Explain the Stage 1 odometry math.
+   - [ ] Explain the Stage 2 Homography/SLAM process.
+   - [ ] Present "Before/After" maps: Raw Odometry vs. Camera-Corrected Map.

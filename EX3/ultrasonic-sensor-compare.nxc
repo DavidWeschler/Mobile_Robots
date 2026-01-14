@@ -1,0 +1,24 @@
+task main()
+{
+    // Initialize both ports for Ultrasonic Sensors
+    // Note: Ultrasonic sensors use the "Lowspeed" (I2C) digital standard
+    SetSensorLowspeed(S3);
+    SetSensorLowspeed(S4);
+
+    while (true)
+    {
+        // Read values (SensorUS returns distance in centimeters)
+        int usValue3 = SensorUS(S3);
+        int usValue4 = SensorUS(S4);
+
+        ClearScreen();
+        
+        TextOut(0, LCD_LINE1, "US Port 3:");
+        NumOut(70, LCD_LINE1, usValue3);
+
+        TextOut(0, LCD_LINE2, "US Port 4:");
+        NumOut(70, LCD_LINE2, usValue4);
+
+        Wait(100); // small delay to reduce screen flicker
+    }
+}

@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- CONFIGURATION ---
-CAMERA_INDEX = 0             # Try 0, 1, or 2
+CAMERA_INDEX = 2             # Try 0, 1, or 2
 OUTPUT_TXT = 'trajectory_real_world.txt'
 WARMUP_FRAMES = 60
 MIN_AREA_SIZE = 500
@@ -132,7 +132,7 @@ H = get_homography_manual(calibration_frame)
 print("Calibration Complete.")
 
 # --- PHASE 3: TRACKING ---
-back_sub = cv2.createBackgroundSubtractorKNN(history=500, dist2Threshold=400, detectShadows=True)
+back_sub = cv2.createBackgroundSubtractorKNN(history=1500, dist2Threshold=400, detectShadows=True)
 trajectory_real = []
 trajectory_pixels = []
 frame_count = 0

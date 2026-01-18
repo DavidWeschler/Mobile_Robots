@@ -125,11 +125,12 @@ task main()
             Wait(200);
 
             // Back up
-            RotateMotor(BOTH_MOTORS, BASE_SPEED, -180);
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
             Wait(200);
 
             // Turn Right (Spin on spot to find wall again)
-            RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
+            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);
+
             
 
             // Reset PID memory so we don't jump immediately

@@ -1,0 +1,325 @@
+/*
+ * Arena Tracker Frontend - NXT Robot Display
+ * ============================================
+ * This program receives arena data, path data, and status messages
+ * from the Python backend via Bluetooth and displays them on the NXT screen.
+ *
+ * The robot receives:
+ * - Arena dimensions and corner positions
+ * - Robot's path trajectory
+ * - Current robot position
+ * - Status messages
+ *
+ * Data is received periodically and the screen updates in real-time.
+ */
+
+// ============================================================================
+// MAILBOX DEFINITIONS (must match Python backend)
+// ============================================================================
+#define MAILBOX_ARENA  1   // Receives arena data
+#define MAILBOX_PATH   2   // Receives path data
+#define MAILBOX_STATUS 3   // Receives status messages
+
+// ============================================================================
+// DISPLAY SETTINGS
+// ============================================================================
+#define SCREEN_WIDTH   100
+#define SCREEN_HEIGHT  64
+#define MAP_OFFSET_X   1
+#define MAP_OFFSET_Y   1
+#define MAP_WIDTH      60
+#define MAP_HEIGHT     50
+
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
+#define MAX_CORNERS    8
+#define MAX_PATH_POINTS 20
+
+// Arena data
+int arena_width = 0;
+int arena_height = 0;
+int num_corners = 0;
+int corner_x[MAX_CORNERS];
+int corner_y[MAX_CORNERS];
+
+// Path data
+int num_path_points = 0;
+int path_x[MAX_PATH_POINTS];
+int path_y[MAX_PATH_POINTS];
+int robot_x = 0;
+int robot_y = 0;
+
+// Status
+string status_msg = "Waiting...";
+bool arena_received = false;
+bool path_received = false;
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Scale coordinate from arena space to screen space
+int ScaleX(int x) {
+    if (arena_width == 0) return 0;
+    return MAP_OFFSET_X + (x * MAP_WIDTH) / arena_width;
+}
+
+int ScaleY(int y) {
+    if (arena_height == 0) return 0;
+    return MAP_OFFSET_Y + (y * MAP_HEIGHT) / arena_height;
+}
+
+// Parse integer from string starting at position
+int ParseInt(string s, int &pos) {
+    int result = 0;
+    int len = StrLen(s);
+    bool negative = false;
+
+    // Skip non-digit characters
+    while (pos < len && (StrIndex(s, pos) < '0' || StrIndex(s, pos) > '9')) {
+        if (StrIndex(s, pos) == '-') negative = true;
+        pos++;
+    }
+
+    // Parse digits
+    while (pos < len && StrIndex(s, pos) >= '0' && StrIndex(s, pos) <= '9') {
+        result = result * 10 + (StrIndex(s, pos) - '0');
+        pos++;
+    }
+
+    if (negative) result = -result;
+    return result;
+}
+
+// ============================================================================
+// MESSAGE PARSING FUNCTIONS
+// ============================================================================
+
+// Parse arena message: "A:width,height|num_corners|x1,y1;x2,y2;..."
+void ParseArenaMessage(string msg) {
+    int pos = 0;
+    int len = StrLen(msg);
+
+    // Check message type
+    if (len < 2 || StrIndex(msg, 0) != 'A') return;
+    pos = 2; // Skip "A:"
+
+    // Parse width and height
+    arena_width = ParseInt(msg, pos);
+    arena_height = ParseInt(msg, pos);
+
+    // Parse number of corners
+    num_corners = ParseInt(msg, pos);
+    if (num_corners > MAX_CORNERS) num_corners = MAX_CORNERS;
+
+    // Parse corner coordinates
+    for (int i = 0; i < num_corners; i++) {
+        corner_x[i] = ParseInt(msg, pos);
+        corner_y[i] = ParseInt(msg, pos);
+    }
+
+    arena_received = true;
+}
+
+// Parse path message: "P:cx,cy|num_points|x1,y1;x2,y2;..."
+void ParsePathMessage(string msg) {
+    int pos = 0;
+    int len = StrLen(msg);
+
+    // Check message type
+    if (len < 2 || StrIndex(msg, 0) != 'P') return;
+    pos = 2; // Skip "P:"
+
+    // Parse current robot position
+    robot_x = ParseInt(msg, pos);
+    robot_y = ParseInt(msg, pos);
+
+    // Parse number of path points
+    num_path_points = ParseInt(msg, pos);
+    if (num_path_points > MAX_PATH_POINTS) num_path_points = MAX_PATH_POINTS;
+
+    // Parse path coordinates
+    for (int i = 0; i < num_path_points; i++) {
+        path_x[i] = ParseInt(msg, pos);
+        path_y[i] = ParseInt(msg, pos);
+    }
+
+    path_received = true;
+}
+
+// ============================================================================
+// DRAWING FUNCTIONS
+// ============================================================================
+
+// Draw the arena walls (connecting corners)
+void DrawArena() {
+    if (!arena_received || num_corners < 3) return;
+
+    // Draw walls as lines connecting corners
+    for (int i = 0; i < num_corners; i++) {
+        int next = (i + 1) % num_corners;
+        int x1 = ScaleX(corner_x[i]);
+        int y1 = ScaleY(corner_y[i]);
+        int x2 = ScaleX(corner_x[next]);
+        int y2 = ScaleY(corner_y[next]);
+        LineOut(x1, SCREEN_HEIGHT - y1, x2, SCREEN_HEIGHT - y2);
+    }
+
+    // Draw corner markers
+    for (int i = 0; i < num_corners; i++) {
+        int x = ScaleX(corner_x[i]);
+        int y = SCREEN_HEIGHT - ScaleY(corner_y[i]);
+        CircleOut(x, y, 2);
+    }
+}
+
+// Draw the robot's path
+void DrawPath() {
+    if (!path_received || num_path_points < 2) return;
+
+    // Draw path as connected line segments
+    for (int i = 1; i < num_path_points; i++) {
+        int x1 = ScaleX(path_x[i-1]);
+        int y1 = ScaleY(path_y[i-1]);
+        int x2 = ScaleX(path_x[i]);
+        int y2 = ScaleY(path_y[i]);
+        LineOut(x1, SCREEN_HEIGHT - y1, x2, SCREEN_HEIGHT - y2);
+    }
+}
+
+// Draw current robot position
+void DrawRobot() {
+    if (!path_received) return;
+
+    int x = ScaleX(robot_x);
+    int y = SCREEN_HEIGHT - ScaleY(robot_y);
+
+    // Draw robot as filled circle
+    CircleOut(x, y, 3);
+    PointOut(x, y);
+    PointOut(x+1, y);
+    PointOut(x-1, y);
+    PointOut(x, y+1);
+    PointOut(x, y-1);
+}
+
+// Draw info panel on the right side
+void DrawInfoPanel() {
+    // Draw separator line
+    LineOut(65, 0, 65, SCREEN_HEIGHT);
+
+    // Status text area (right side of screen)
+    TextOut(68, LCD_LINE1, "TRACKER");
+
+    // Arena status
+    if (arena_received) {
+        TextOut(68, LCD_LINE3, "Arena:OK");
+        string dim_str;
+        sprintf(dim_str, "%dx%d", arena_width, arena_height);
+        TextOut(68, LCD_LINE4, dim_str);
+    } else {
+        TextOut(68, LCD_LINE3, "Arena:--");
+    }
+
+    // Path status
+    if (path_received) {
+        string path_str;
+        sprintf(path_str, "Pts:%d", num_path_points);
+        TextOut(68, LCD_LINE5, path_str);
+
+        // Current position
+        string pos_str;
+        sprintf(pos_str, "X:%d", robot_x);
+        TextOut(68, LCD_LINE6, pos_str);
+        sprintf(pos_str, "Y:%d", robot_y);
+        TextOut(68, LCD_LINE7, pos_str);
+    } else {
+        TextOut(68, LCD_LINE5, "Path:--");
+    }
+}
+
+// Main display update function
+void UpdateDisplay() {
+    ClearScreen();
+
+    // Draw map elements
+    DrawArena();
+    DrawPath();
+    DrawRobot();
+
+    // Draw info panel
+    DrawInfoPanel();
+}
+
+// ============================================================================
+// MESSAGE RECEIVER TASK
+// ============================================================================
+
+task ReceiveMessages() {
+    string msg;
+    int status;
+
+    while (true) {
+        // Check for arena data
+        status = ReceiveRemoteString(MAILBOX_ARENA, true, msg);
+        if (status == 0 && StrLen(msg) > 0) {
+            ParseArenaMessage(msg);
+            PlayTone(440, 50);  // Beep on arena update
+        }
+
+        // Check for path data
+        status = ReceiveRemoteString(MAILBOX_PATH, true, msg);
+        if (status == 0 && StrLen(msg) > 0) {
+            ParsePathMessage(msg);
+        }
+
+        // Check for status messages
+        status = ReceiveRemoteString(MAILBOX_STATUS, true, msg);
+        if (status == 0 && StrLen(msg) > 0) {
+            status_msg = msg;
+            PlayTone(880, 50);  // Higher beep on status
+        }
+
+        Wait(50);  // Check messages every 50ms
+    }
+}
+
+// ============================================================================
+// DISPLAY UPDATE TASK
+// ============================================================================
+
+task DisplayUpdate() {
+    while (true) {
+        UpdateDisplay();
+        Wait(200);  // Update display every 200ms (5 FPS)
+    }
+}
+
+// ============================================================================
+// MAIN ENTRY POINT
+// ============================================================================
+
+task main() {
+    // Initialize display
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "Arena Tracker");
+    TextOut(0, LCD_LINE2, "Frontend v1.0");
+    TextOut(0, LCD_LINE4, "Waiting for");
+    TextOut(0, LCD_LINE5, "connection...");
+
+    // Initialize arrays
+    for (int i = 0; i < MAX_CORNERS; i++) {
+        corner_x[i] = 0;
+        corner_y[i] = 0;
+    }
+    for (int i = 0; i < MAX_PATH_POINTS; i++) {
+        path_x[i] = 0;
+        path_y[i] = 0;
+    }
+
+    Wait(2000);  // Show startup screen for 2 seconds
+
+    // Start tasks
+    Precedes(ReceiveMessages, DisplayUpdate);
+}

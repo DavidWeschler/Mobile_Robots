@@ -1,5 +1,5 @@
 // ==================================================================
-// WALL FOLLOWER + REAL-TIME MAPPING
+// WALL FOLLOWER + AUTO-SCALING MAP
 // ==================================================================
 
 #define RIGHT_MOTOR     OUT_A
@@ -14,30 +14,30 @@
 const float WHEEL_DIAMETER = 5.6;
 const float TRACK_WIDTH    = 11.8;
 
-// --- MAPPING CONSTANTS ---
-// 0.5 means 1 cm of movement = 0.5 pixels on screen.
-// Adjust this: if map is too big, make smaller (0.3). If too small, make bigger (1.0).
-const float MAP_SCALE = 0.6;
-const int START_X_PIXEL = 50; // Start in middle of screen width
-const int START_Y_PIXEL = 10; // Start near bottom of screen
+// --- MAPPING CONFIGURATION ---
+#define MAX_POINTS 1500         // Maximum points to store in memory
+#define DRAW_INTERVAL 1000      // Redraw every 1000ms (1 second)
+#define MIN_SAVE_DIST 2.0       // Only save point if moved 2cm (Reduces lag)
+
+// --- MEMORY ARRAYS ---
+float pathX[MAX_POINTS];
+float pathY[MAX_POINTS];
+int pointCount = 0;
+long lastDrawTime = 0;
+
+// --- ODOMETRY VARIABLES ---
+float x_cm = 0.0;
+float y_cm = 0.0;
+float theta_rad = 1.57; // Start facing UP (90 deg)
+
+long old_enc_left = 0;
+long old_enc_right = 0;
 
 // --- TUNING ---
 const int TARGET_DISTANCE = 30;
 const int BASE_SPEED = 50;
 const int BLACK_THRESHOLD = 30;
 const int TARGET_LINE_COUNT = 8;
-
-// --- ODOMETRY VARIABLES ---
-float x_cm = 0.0;
-float y_cm = 0.0;
-float theta_rad = 1.57; // Start facing UP (90 degrees = PI/2)
-
-long old_enc_left = 0;
-long old_enc_right = 0;
-
-// Screen previous coordinates (to draw connecting lines)
-int prev_screen_x = START_X_PIXEL;
-int prev_screen_y = START_Y_PIXEL;
 
 // --- PID VARIABLES ---
 const float KP = 1.2;
@@ -48,7 +48,6 @@ const float INTEGRAL_MAX = 300;
 
 // --- GLOBAL VARIABLES ---
 int lineCount = 0;
-bool onLine = false;
 const int N = 3;
 int samples[N];
 
@@ -66,10 +65,68 @@ int GetFilteredDistance() {
 }
 
 // ------------------------------------------------------------------
-// FUNCTION: Update Odometry & Draw on Screen
+// FUNCTION: Redraw Map (Auto-Scaling)
 // ------------------------------------------------------------------
-void UpdateOdometryAndDraw() {
-    // 1. Calculate Motion
+void RedrawMap() {
+    if (pointCount < 2) return;
+
+    // 1. Find Min/Max to auto-fit the screen
+    float min_x = pathX[0]; float max_x = pathX[0];
+    float min_y = pathY[0]; float max_y = pathY[0];
+
+    for(int i=1; i < pointCount; i++) {
+        if (pathX[i] < min_x) min_x = pathX[i];
+        if (pathX[i] > max_x) max_x = pathX[i];
+        if (pathY[i] < min_y) min_y = pathY[i];
+        if (pathY[i] > max_y) max_y = pathY[i];
+    }
+
+    // 2. Calculate Range
+    float range_x = max_x - min_x;
+    float range_y = max_y - min_y;
+
+    // Prevent divide by zero if robot hasn't moved
+    if (range_x < 1.0) range_x = 1.0;
+    if (range_y < 1.0) range_y = 1.0;
+
+    // 3. Calculate Scale Factors (Screen is 100x64)
+    // We leave a 2-pixel margin
+    float scale_x = 96.0 / range_x;
+    float scale_y = 60.0 / range_y;
+
+    // Pick the smaller scale to maintain aspect ratio (don't stretch the map)
+    float scale = scale_x;
+    if (scale_y < scale_x) scale = scale_y;
+
+    // 4. Draw
+    ClearScreen();
+    
+    // Draw Start Point (Circle)
+    int sx = (pathX[0] - min_x) * scale + 2;
+    int sy = (pathY[0] - min_y) * scale + 2;
+    CircleOut(sx, sy, 2);
+
+    // Draw all segments
+    for(int i=0; i < pointCount-1; i++) {
+        int x1 = (pathX[i]   - min_x) * scale + 2;
+        int y1 = (pathY[i]   - min_y) * scale + 2;
+        int x2 = (pathX[i+1] - min_x) * scale + 2;
+        int y2 = (pathY[i+1] - min_y) * scale + 2;
+        
+        LineOut(x1, y1, x2, y2);
+    }
+    
+    // Draw Current Position (X)
+    int ex = (pathX[pointCount-1] - min_x) * scale + 2;
+    int ey = (pathY[pointCount-1] - min_y) * scale + 2;
+    LineOut(ex-2, ey-2, ex+2, ey+2);
+    LineOut(ex-2, ey+2, ex+2, ey-2);
+}
+
+// ------------------------------------------------------------------
+// FUNCTION: Calculate Position & Update Array
+// ------------------------------------------------------------------
+void UpdateOdometry() {
     long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
     long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
 
@@ -92,18 +149,30 @@ void UpdateOdometryAndDraw() {
     y_cm += d_center * sin(avg_theta);
     theta_rad += d_theta;
 
-    // 2. Convert to Screen Coordinates
-    // We add the START offsets to center the map
-    int curr_screen_x = START_X_PIXEL + (x_cm * MAP_SCALE);
-    int curr_screen_y = START_Y_PIXEL + (y_cm * MAP_SCALE);
-
-    // 3. Draw Line from Previous Point to Current Point
-    // This creates a continuous trail even if the loop is slow
-    LineOut(prev_screen_x, prev_screen_y, curr_screen_x, curr_screen_y);
-
-    // 4. Update Previous History
-    prev_screen_x = curr_screen_x;
-    prev_screen_y = curr_screen_y;
+    // --- SAVE POINT LOGIC ---
+    // Only save if array is not full AND robot moved enough distance
+    // (This prevents the array from filling up with "noise" when standing still)
+    if (pointCount < MAX_POINTS) {
+        
+        // If it's the first point, always save
+        if (pointCount == 0) {
+            pathX[0] = x_cm;
+            pathY[0] = y_cm;
+            pointCount++;
+        } 
+        else {
+            // Check distance from last saved point
+            float dx = x_cm - pathX[pointCount-1];
+            float dy = y_cm - pathY[pointCount-1];
+            float dist = sqrt(dx*dx + dy*dy);
+            
+            if (dist >= MIN_SAVE_DIST) {
+                pathX[pointCount] = x_cm;
+                pathY[pointCount] = y_cm;
+                pointCount++;
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -126,24 +195,29 @@ task main()
     // Variables
     float integral = 0;
     int lastError = 0;
-
-    // --- SCREEN SETUP ---
-    ClearScreen();
-    TextOut(0, LCD_LINE8, "Lines: 0"); // Initialize text at bottom
-    CircleOut(START_X_PIXEL, START_Y_PIXEL, 2); // Draw start point
+    lastDrawTime = CurrentTick();
 
     // ----------------- MAIN LOOP -----------------
     while (Sensor(SOUND_SENSOR) < 99) {
 
-        // A. UPDATE MAP
-        UpdateOdometryAndDraw();
+        // A. ODOMETRY
+        UpdateOdometry();
+        
+        // B. MAP REFRESH TIMER (Every 1 Second)
+        if (CurrentTick() - lastDrawTime > DRAW_INTERVAL) {
+            RedrawMap();
+            lastDrawTime = CurrentTick();
+        }
 
         // C. EXIT CONDITION
         if (lineCount >= TARGET_LINE_COUNT) {
             Off(BOTH_MOTORS);
             PlaySound(SOUND_UP);
-            TextOut(0, LCD_LINE1, "DONE!");
-            Wait(10000); // Wait so you can admire the map
+            
+            // Final Redraw to ensure complete map is shown
+            RedrawMap(); 
+            TextOut(0, LCD_LINE8, "DONE!");
+            Wait(10000); 
             break;
         }
 
@@ -155,20 +229,15 @@ task main()
             PlaySound(SOUND_LOW_BEEP);
             Wait(200);
 
-            // Back up
             RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
-
-            // Spin
             RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
 
-            // Because RotateMotor stops the code execution,
-            // we run this ONCE immediately to catch up the map drawing
-            UpdateOdometryAndDraw();
+            // Catch up calculations immediately
+            UpdateOdometry();
 
-            // Reset PID
             integral = 0;
             lastError = 0;
-
+            
             // Refill filter
             int current = SensorUS(ULTRASONIC_SENSOR);
             for (int i=0; i<N; i++) samples[i] = current;
@@ -183,7 +252,6 @@ task main()
         if (abs(error) < 10) integral += error;
         else integral = 0;
 
-        // Clamp Integral
         if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
         if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;
 
@@ -193,7 +261,6 @@ task main()
         int leftSpeed  = BASE_SPEED - turnRatio;
         int rightSpeed = BASE_SPEED + turnRatio;
 
-        // Clamp Speeds
         if (leftSpeed < 0) leftSpeed = 0;
         if (rightSpeed < 0) rightSpeed = 0;
         if (leftSpeed > 100) leftSpeed = 100;

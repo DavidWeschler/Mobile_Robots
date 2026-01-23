@@ -50,6 +50,7 @@ const float INTEGRAL_MAX = 300;
 int lineCount = 0;
 const int N = 3;
 int samples[N];
+byte fileHandle;
 
 // ------------------------------------------------------------------
 // FUNCTION: Filter Sensor Noise
@@ -272,4 +273,20 @@ task main()
         lastError = error;
         Wait(40);
     }
+    Off(BOTH_MOTORS);
+
+    // save to a txt file the path taken
+    TextOut(0, LCD_LINE8, "SAVING...");
+    string filename = "SLAM_PATH.TXT";
+    unsigned int bw = 0;
+    DeleteFile(filename);
+    if (CreateFile(filename, 15000, fileHandle) == LDR_SUCCESS){
+        for (int i = 0; i < pointCount; i++) {
+            string line = StrCat(FormatNum("%6d", pathX[i]), ",", FormatNum("%6d", pathY[i]), "\n");
+            WriteString(fileHandle, line, bw);
+        }
+    }
+    CloseFile(fileHandle);
+    TextOut(0, LCD_LINE8, "SAVED!");
+    Wait(5000);
 }

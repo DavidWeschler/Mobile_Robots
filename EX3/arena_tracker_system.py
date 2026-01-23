@@ -68,7 +68,7 @@ class Config:
     BG_THRESHOLD: float = 400  # Background subtractor threshold
     MIN_ROBOT_AREA: int = 300  # Minimum contour area to be robot
     WARMUP_FRAMES: int = 60  # Frames to wait before tracking
-    MAX_TRAJECTORY_POINTS: int = 500  # Maximum trajectory points to keep
+    MAX_TRAJECTORY_POINTS: int = 5000  # Maximum trajectory points to keep
     
     # Bluetooth Settings
     NXT_ADDRESS: str = "00:16:53:0A:A0:2D"  # NXT Bluetooth address

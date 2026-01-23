@@ -1,5 +1,5 @@
 // ==================================================================
-// WALL FOLLOWER + LINE COUNTER + ODOMETRY
+// WALL FOLLOWER + REAL-TIME MAPPING
 // ==================================================================
 
 #define RIGHT_MOTOR     OUT_A
@@ -10,26 +10,36 @@
 #define TOUCH_SENSOR    S1
 #define LIGHT_SENSOR    S2
 
-// --- TUNING CONSTANTS ---
-const int TARGET_DISTANCE = 30;   // Distance from wall (cm)
-const int BASE_SPEED = 50;        // Standard forward speed
-const int BLACK_THRESHOLD = 30;   // Light sensor reading for black line
-const int TARGET_LINE_COUNT = 8;  // Stop after this many lines
+// --- PHYSICAL CONSTANTS ---
+const float WHEEL_DIAMETER = 5.6;
+const float TRACK_WIDTH    = 11.8;
 
-// --- PHYSICAL ROBOT CONSTANTS (MEASURE THESE!) ---
-// If your location is inaccurate, adjust these numbers.
-const float WHEEL_DIAMETER = 5.6; // cm
-const float TRACK_WIDTH    = 11.8; // cm (distance between centers of tires)
+// --- MAPPING CONSTANTS ---
+// 0.5 means 1 cm of movement = 0.5 pixels on screen.
+// Adjust this: if map is too big, make smaller (0.3). If too small, make bigger (1.0).
+const float MAP_SCALE = 0.6; 
+const int START_X_PIXEL = 50; // Start in middle of screen width
+const int START_Y_PIXEL = 10; // Start near bottom of screen
+
+// --- TUNING ---
+const int TARGET_DISTANCE = 30;
+const int BASE_SPEED = 50;
+const int BLACK_THRESHOLD = 30;
+const int TARGET_LINE_COUNT = 8;
 
 // --- ODOMETRY VARIABLES ---
 float x_cm = 0.0;
 float y_cm = 0.0;
-float theta_rad = 0.0;
+float theta_rad = 1.57; // Start facing UP (90 degrees = PI/2)
 
 long old_enc_left = 0;
 long old_enc_right = 0;
 
-// PID Constants
+// Screen previous coordinates (to draw connecting lines)
+int prev_screen_x = START_X_PIXEL;
+int prev_screen_y = START_Y_PIXEL;
+
+// --- PID VARIABLES ---
 const float KP = 1.2;
 const float KI = 0.005;
 const float KD = 15.0;
@@ -39,81 +49,61 @@ const float INTEGRAL_MAX = 300;
 // --- GLOBAL VARIABLES ---
 int lineCount = 0;
 bool onLine = false;
-
-// Filter Variables
 const int N = 3;
 int samples[N];
 
 // ------------------------------------------------------------------
-// FUNCTION: Weighted Moving Average Filter
+// FUNCTION: Filter Sensor Noise
 // ------------------------------------------------------------------
 int GetFilteredDistance() {
     int raw = SensorUS(ULTRASONIC_SENSOR);
     if (raw > 255) raw = 255;
-
-    for (int i = N - 1; i > 0; i--) {
-        samples[i] = samples[i - 1];
-    }
+    for (int i = N - 1; i > 0; i--) samples[i] = samples[i - 1];
     samples[0] = raw;
-
     int sum = 0;
-    for (int i = 0; i < N; i++) {
-        sum += samples[i];
-    }
+    for (int i = 0; i < N; i++) sum += samples[i];
     return sum / N;
 }
 
 // ------------------------------------------------------------------
-// FUNCTION: Check for Black Lines
+// FUNCTION: Update Odometry & Draw on Screen
 // ------------------------------------------------------------------
-void CheckLine() {
-    int lightValue = Sensor(LIGHT_SENSOR);
-
-    if (lightValue < BLACK_THRESHOLD) {
-        if (onLine == false) {
-            lineCount++;
-            onLine = true;
-            PlaySound(SOUND_CLICK);
-        }
-    }
-    else if (lightValue > (BLACK_THRESHOLD + 5)) {
-        onLine = false;
-    }
-}
-
-// ------------------------------------------------------------------
-// FUNCTION: Calculate Odometry (Position Tracking)
-// ------------------------------------------------------------------
-void UpdateOdometry() {
-    // 1. Get current tacho counts
+void UpdateOdometryAndDraw() {
+    // 1. Calculate Motion
     long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
     long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
 
-    // 2. Calculate change in ticks
     long d_ticks_left  = curr_enc_left  - old_enc_left;
     long d_ticks_right = curr_enc_right - old_enc_right;
 
-    // 3. Update history
     old_enc_left  = curr_enc_left;
     old_enc_right = curr_enc_right;
 
-    // 4. Convert ticks to cm
-    // (PI * Diameter) / 360 degrees
-    float cm_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
-    float d_left  = d_ticks_left  * cm_per_tick;
-    float d_right = d_ticks_right * cm_per_tick;
+    float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
+    float d_left  = d_ticks_left  * dist_per_tick;
+    float d_right = d_ticks_right * dist_per_tick;
 
-    // 5. Calculate Center distance and Change in Angle
     float d_center = (d_left + d_right) / 2.0;
     float d_theta  = (d_right - d_left) / TRACK_WIDTH;
 
-    // 6. Update Global Coordinates
-    // Use average angle for better accuracy during turns
     float avg_theta = theta_rad + (d_theta / 2.0);
 
     x_cm += d_center * cos(avg_theta);
     y_cm += d_center * sin(avg_theta);
     theta_rad += d_theta;
+
+    // 2. Convert to Screen Coordinates
+    // We add the START offsets to center the map
+    int curr_screen_x = START_X_PIXEL + (int)(x_cm * MAP_SCALE);
+    int curr_screen_y = START_Y_PIXEL + (int)(y_cm * MAP_SCALE);
+
+    // 3. Draw Line from Previous Point to Current Point
+    // This creates a continuous trail even if the loop is slow
+    LineOut(prev_screen_x, prev_screen_y, curr_screen_x, curr_screen_y);
+
+    // 4. Update Previous History
+    prev_screen_x = curr_screen_x;
+    prev_screen_y = curr_screen_y;
 }
 
 // ------------------------------------------------------------------
@@ -121,63 +111,59 @@ void UpdateOdometry() {
 // ------------------------------------------------------------------
 task main()
 {
-    // 1. Setup Sensors
+    // Setup
     SetSensorLowspeed(ULTRASONIC_SENSOR);
     SetSensorTouch(TOUCH_SENSOR);
     SetSensorLight(LIGHT_SENSOR, true);
 
-    // 2. Reset Encoders & Odometry
     ResetTachoCount(LEFT_MOTOR);
     ResetTachoCount(RIGHT_MOTOR);
-    old_enc_left = 0;
-    old_enc_right = 0;
-    x_cm = 0;
-    y_cm = 0;
-    theta_rad = 0;
-
-    // 3. Initialize Filter
+    
+    // Init Filter
     int initialDist = SensorUS(ULTRASONIC_SENSOR);
     for (int i = 0; i < N; i++) samples[i] = initialDist;
 
-    // 4. Variables
-    lineCount = 0;
-    onLine = false;
+    // Variables
     float integral = 0;
     int lastError = 0;
 
-    TextOut(0, LCD_LINE1, "ODO TRACKING");
-    TextOut(0, LCD_LINE2, "Target: 8 Lines");
+    // --- SCREEN SETUP ---
+    ClearScreen();
+    TextOut(0, LCD_LINE8, "Lines: 0"); // Initialize text at bottom
+    CircleOut(START_X_PIXEL, START_Y_PIXEL, 2); // Draw start point
 
     // ----------------- MAIN LOOP -----------------
     while (true) {
+        
+        // A. UPDATE MAP
+        UpdateOdometryAndDraw();
 
-        // A. UPDATE ODOMETRY & SCREEN
-        UpdateOdometry();
-
-        // Convert radians to degrees for easier reading on screen
-        int theta_deg = theta_rad * 180.0 / PI;
-
-        // Display Position (Lines 4, 5, 6)
-        TextOut(0, LCD_LINE4, "Lines:      ");
-        NumOut(40, LCD_LINE4, lineCount);
-
-        TextOut(0, LCD_LINE5, "X:          ");
-        NumOut(20, LCD_LINE5, x_cm);
-
-        TextOut(0, LCD_LINE6, "Y:          ");
-        NumOut(20, LCD_LINE6, y_cm);
-
-        // B. CHECK EXIT CONDITION
+        // B. CHECK SENSORS
+        int lightValue = Sensor(LIGHT_SENSOR);
+        if (lightValue < BLACK_THRESHOLD) {
+            if (!onLine) {
+                lineCount++;
+                onLine = true;
+                PlaySound(SOUND_CLICK);
+                
+                // Update Text (Clear the line area first with spaces to avoid mess)
+                TextOut(0, LCD_LINE8, "          "); 
+                NumOut(40, LCD_LINE8, lineCount);
+                TextOut(0, LCD_LINE8, "Lines:");
+            }
+        } else if (lightValue > (BLACK_THRESHOLD + 5)) {
+            onLine = false;
+        }
+        
+        // C. EXIT CONDITION
         if (lineCount >= TARGET_LINE_COUNT) {
             Off(BOTH_MOTORS);
             PlaySound(SOUND_UP);
-            TextOut(0, LCD_LINE8, "DONE: 8 LINES!");
-            Wait(5000);
+            TextOut(0, LCD_LINE1, "DONE!");
+            Wait(10000); // Wait so you can admire the map
             break;
         }
 
-        // C. CHECK SENSORS
-        CheckLine();
         int distance = GetFilteredDistance();
 
         // D. COLLISION RECOVERY
@@ -188,29 +174,33 @@ task main()
 
             // Back up
             RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
-            Wait(200);
-
+            
             // Spin
-            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);
-
-            // IMPORTANT: Catch up on odometry calculations
-            // Because RotateMotor paused the loop, we need to process
-            // the movement that just happened.
-            UpdateOdometry();
-
+            RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
+            
+            // Because RotateMotor stops the code execution, 
+            // we run this ONCE immediately to catch up the map drawing
+            UpdateOdometryAndDraw(); 
+            
             // Reset PID
             integral = 0;
             lastError = 0;
+            
+            // Refill filter
+            int current = SensorUS(ULTRASONIC_SENSOR);
+            for (int i=0; i<N; i++) samples[i] = current;
+            
             continue;
         }
 
-        // E. PID CALCULATION
+        // E. PID CONTROL
         int error = distance - TARGET_DISTANCE;
         if (abs(error) < DEAD_ZONE) error = 0;
 
         if (abs(error) < 10) integral += error;
         else integral = 0;
-
+        
+        // Clamp Integral
         if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
         if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;
 
@@ -220,6 +210,7 @@ task main()
         int leftSpeed  = BASE_SPEED - turnRatio;
         int rightSpeed = BASE_SPEED + turnRatio;
 
+        // Clamp Speeds
         if (leftSpeed < 0) leftSpeed = 0;
         if (rightSpeed < 0) rightSpeed = 0;
         if (leftSpeed > 100) leftSpeed = 100;
@@ -229,7 +220,6 @@ task main()
         OnFwd(RIGHT_MOTOR, rightSpeed);
 
         lastError = error;
-
-        Wait(40); // Loop delay
+        Wait(40);
     }
 }

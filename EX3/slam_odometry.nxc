@@ -8,7 +8,7 @@
 
 #define ULTRASONIC_SENSOR S4
 #define TOUCH_SENSOR    S1
-#define LIGHT_SENSOR    S2
+#define SOUND_SENSOR    S2
 
 // --- PHYSICAL CONSTANTS ---
 const float WHEEL_DIAMETER = 5.6;
@@ -17,7 +17,7 @@ const float TRACK_WIDTH    = 11.8;
 // --- MAPPING CONSTANTS ---
 // 0.5 means 1 cm of movement = 0.5 pixels on screen.
 // Adjust this: if map is too big, make smaller (0.3). If too small, make bigger (1.0).
-const float MAP_SCALE = 0.6; 
+const float MAP_SCALE = 0.6;
 const int START_X_PIXEL = 50; // Start in middle of screen width
 const int START_Y_PIXEL = 10; // Start near bottom of screen
 
@@ -94,8 +94,8 @@ void UpdateOdometryAndDraw() {
 
     // 2. Convert to Screen Coordinates
     // We add the START offsets to center the map
-    int curr_screen_x = START_X_PIXEL + (int)(x_cm * MAP_SCALE);
-    int curr_screen_y = START_Y_PIXEL + (int)(y_cm * MAP_SCALE);
+    int curr_screen_x = START_X_PIXEL + (x_cm * MAP_SCALE);
+    int curr_screen_y = START_Y_PIXEL + (y_cm * MAP_SCALE);
 
     // 3. Draw Line from Previous Point to Current Point
     // This creates a continuous trail even if the loop is slow
@@ -114,11 +114,11 @@ task main()
     // Setup
     SetSensorLowspeed(ULTRASONIC_SENSOR);
     SetSensorTouch(TOUCH_SENSOR);
-    SetSensorLight(LIGHT_SENSOR, true);
+    SetSensorSound(SOUND_SENSOR);
 
     ResetTachoCount(LEFT_MOTOR);
     ResetTachoCount(RIGHT_MOTOR);
-    
+
     // Init Filter
     int initialDist = SensorUS(ULTRASONIC_SENSOR);
     for (int i = 0; i < N; i++) samples[i] = initialDist;
@@ -133,28 +133,11 @@ task main()
     CircleOut(START_X_PIXEL, START_Y_PIXEL, 2); // Draw start point
 
     // ----------------- MAIN LOOP -----------------
-    while (true) {
-        
+    while (Sensor(SOUND_SENSOR) < 99) {
+
         // A. UPDATE MAP
         UpdateOdometryAndDraw();
 
-        // B. CHECK SENSORS
-        int lightValue = Sensor(LIGHT_SENSOR);
-        if (lightValue < BLACK_THRESHOLD) {
-            if (!onLine) {
-                lineCount++;
-                onLine = true;
-                PlaySound(SOUND_CLICK);
-                
-                // Update Text (Clear the line area first with spaces to avoid mess)
-                TextOut(0, LCD_LINE8, "          "); 
-                NumOut(40, LCD_LINE8, lineCount);
-                TextOut(0, LCD_LINE8, "Lines:");
-            }
-        } else if (lightValue > (BLACK_THRESHOLD + 5)) {
-            onLine = false;
-        }
-        
         // C. EXIT CONDITION
         if (lineCount >= TARGET_LINE_COUNT) {
             Off(BOTH_MOTORS);
@@ -174,22 +157,22 @@ task main()
 
             // Back up
             RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
-            
+
             // Spin
             RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
-            
-            // Because RotateMotor stops the code execution, 
+
+            // Because RotateMotor stops the code execution,
             // we run this ONCE immediately to catch up the map drawing
-            UpdateOdometryAndDraw(); 
-            
+            UpdateOdometryAndDraw();
+
             // Reset PID
             integral = 0;
             lastError = 0;
-            
+
             // Refill filter
             int current = SensorUS(ULTRASONIC_SENSOR);
             for (int i=0; i<N; i++) samples[i] = current;
-            
+
             continue;
         }
 
@@ -199,7 +182,7 @@ task main()
 
         if (abs(error) < 10) integral += error;
         else integral = 0;
-        
+
         // Clamp Integral
         if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
         if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;

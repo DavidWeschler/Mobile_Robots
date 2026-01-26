@@ -19,9 +19,11 @@ const float TRACK_WIDTH    = 11.8;
 #define DRAW_INTERVAL 1000      // Redraw every 1000ms (1 second)
 #define MIN_SAVE_DIST 2.0       // Only save point if moved 2cm (Reduces lag)
 
-// --- MEMORY ARRAYS ---
+// --- MEMORY ARRAYS (UPDATED FOR 4 COLUMNS) ---
 float pathX[MAX_POINTS];
 float pathY[MAX_POINTS];
+float pathTheta[MAX_POINTS];    // New Column: Angle
+int   pathDist[MAX_POINTS];     // New Column: Distance sensor
 int pointCount = 0;
 long lastDrawTime = 0;
 
@@ -126,8 +128,9 @@ void RedrawMap() {
 
 // ------------------------------------------------------------------
 // FUNCTION: Calculate Position & Update Array
+// ADDED ARGUMENT: current_dist (to save to array)
 // ------------------------------------------------------------------
-void UpdateOdometry() {
+void UpdateOdometry(int current_dist) {
     long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
     long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
 
@@ -151,14 +154,14 @@ void UpdateOdometry() {
     theta_rad += d_theta;
 
     // --- SAVE POINT LOGIC ---
-    // Only save if array is not full AND robot moved enough distance
-    // (This prevents the array from filling up with "noise" when standing still)
     if (pointCount < MAX_POINTS) {
         
         // If it's the first point, always save
         if (pointCount == 0) {
             pathX[0] = x_cm;
             pathY[0] = y_cm;
+            pathTheta[0] = theta_rad;    // Save Theta
+            pathDist[0] = current_dist;  // Save Distance
             pointCount++;
         } 
         else {
@@ -170,6 +173,8 @@ void UpdateOdometry() {
             if (dist >= MIN_SAVE_DIST) {
                 pathX[pointCount] = x_cm;
                 pathY[pointCount] = y_cm;
+                pathTheta[pointCount] = theta_rad;   // Save Theta
+                pathDist[pointCount] = current_dist; // Save Distance
                 pointCount++;
             }
         }
@@ -201,28 +206,17 @@ task main()
     // ----------------- MAIN LOOP -----------------
     while (Sensor(SOUND_SENSOR) < 99) {
 
-        // A. ODOMETRY
-        UpdateOdometry();
+        // Get Distance FIRST so we can log it in Odometry
+        int distance = GetFilteredDistance();
+
+        // A. ODOMETRY (Pass distance to log it)
+        UpdateOdometry(distance);
         
         // B. MAP REFRESH TIMER (Every 1 Second)
         if (CurrentTick() - lastDrawTime > DRAW_INTERVAL) {
             RedrawMap();
             lastDrawTime = CurrentTick();
         }
-
-        // C. EXIT CONDITION
-        if (lineCount >= TARGET_LINE_COUNT) {
-            Off(BOTH_MOTORS);
-            PlaySound(SOUND_UP);
-            
-            // Final Redraw to ensure complete map is shown
-            RedrawMap(); 
-            TextOut(0, LCD_LINE8, "DONE!");
-            Wait(10000); 
-            break;
-        }
-
-        int distance = GetFilteredDistance();
 
         // D. COLLISION RECOVERY
         if (Sensor(TOUCH_SENSOR) == 1) {
@@ -233,8 +227,10 @@ task main()
             RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
             RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
 
-            // Catch up calculations immediately
-            UpdateOdometry();
+            // Update odometry with new distance after recovery
+            // (Re-read sensor for accuracy)
+            int recoveryDist = GetFilteredDistance();
+            UpdateOdometry(recoveryDist);
 
             integral = 0;
             lastError = 0;
@@ -275,15 +271,34 @@ task main()
     }
     Off(BOTH_MOTORS);
 
-    // save to a txt file the path taken
+    // --------------------------------------------------------------
+    // SAVE FILE WITH 4 COLUMNS
+    // --------------------------------------------------------------
     TextOut(0, LCD_LINE8, "SAVING...");
     string filename = "SLAM_PATH.TXT";
     unsigned int bw = 0;
     DeleteFile(filename);
+    
     if (CreateFile(filename, 15000, fileHandle) == LDR_SUCCESS){
+        
         for (int i = 0; i < pointCount; i++) {
-            string line = StrCat(FormatNum("%6d", pathX[i]), ",", FormatNum("%6d", pathY[i]), "\n");
-            WriteString(fileHandle, line, bw);
+            // Convert to large integers (matching friend's code logic)
+            long xo = pathX[i] * 10000;
+            long yo = pathY[i] * 10000;
+            long to = pathTheta[i] * 100000;
+            int dist = pathDist[i];
+
+            // Build string: X, Y, Theta, Distance
+            string s = NumToStr(xo);
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(yo));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(to));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(dist));
+            s = StrCat(s, "\n");
+
+            WriteString(fileHandle, s, bw);
         }
     }
     CloseFile(fileHandle);

@@ -1,0 +1,32 @@
+#define SOUND_SENSOR S2
+#define THRESHOLD 99  // Matching your main script's stop condition
+
+task main() {
+    // 1. Initialize the sensor
+    SetSensorSound(SOUND_SENSOR);
+    
+    TextOut(0, LCD_LINE1, "Sound Test");
+    TextOut(0, LCD_LINE2, "Thresh: 99");
+    TextOut(0, LCD_LINE7, "Press Orange to");
+    TextOut(0, LCD_LINE8, "Exit");
+
+    while(true) {
+        // 2. Read the current sound level (0-100)
+        int volume = Sensor(SOUND_SENSOR);
+        
+        // 3. Display the live data
+        string msg = StrCat("Volume: ", NumToStr(volume), "   "); // Extra spaces clear old digits
+        TextOut(0, LCD_LINE4, msg);
+        
+        // 4. Visual/Audio feedback if threshold is hit
+        if (volume >= THRESHOLD) {
+            TextOut(0, LCD_LINE5, "!!! TRIGGER !!!");
+            PlaySound(SOUND_CLICK);
+            Wait(200); // Small pause so it doesn't beep 100 times per second
+        } else {
+            TextOut(0, LCD_LINE5, "                "); // Clear the trigger text
+        }
+
+        Wait(50); // Small delay to prevent screen flickering
+    }
+}

@@ -8,17 +8,17 @@
 
 #define ULTRASONIC_SENSOR S4
 #define TOUCH_SENSOR    S1
-#define COLOR_SENSOR    S3   // Light/Color sensor for dots
+#define COLOR_SENSOR    S2   // Light/Color sensor for dots
 
 // --- PHYSICAL CONSTANTS ---
 const float WHEEL_DIAMETER = 5.6;
 const float TRACK_WIDTH    = 11.8;
 
 // --- MAPPING CONFIGURATION ---
-#define MAX_POINTS 2000         
-#define MIN_SAVE_DIST 2.0       
-#define BLACK_THRESHOLD 35      // Adjust for your floor vs dots
-#define GREY_THRESHOLD 50       // For "hunting" the dot
+#define MAX_POINTS 2000
+#define MIN_SAVE_DIST 2.0
+#define BLACK_THRESHOLD 25      // Adjust for your floor vs dots
+#define GREY_THRESHOLD 100       // For "hunting" the dot
 
 // --- MEMORY ARRAYS ---
 float pathX[MAX_POINTS];
@@ -34,7 +34,7 @@ long old_enc_left = 0;
 long old_enc_right = 0;
 
 // --- PID & NAVIGATION ---
-const int TARGET_DISTANCE = 30;
+const int TARGET_DISTANCE = 32;
 const int BASE_SPEED = 45;
 const float KP = 1.1;
 const float KD = 12.0;
@@ -116,8 +116,19 @@ task main() {
 
     ResetTachoCount(BOTH_MOTORS);
     int lastError = 0;
+    float total_dist = 0.0;
 
-    while (!ButtonState(BTNCENTER)) { // Run until center button pressed
+    while (total_dist < 1100.00) { // Run until center button pressed
+        long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
+        long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
+
+        float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
+        float d_left  = (curr_enc_left - old_enc_left) * dist_per_tick;
+        float d_right = (curr_enc_right - old_enc_right) * dist_per_tick;
+        float step_dist = (d_left + d_right) / 2.0;
+
+        // Add absolute travel to our counter (using abs to account for reverse)
+        total_dist += abs(step_dist);
         
         int dist = SensorUS(ULTRASONIC_SENSOR);
         int light = Sensor(COLOR_SENSOR);
@@ -129,7 +140,7 @@ task main() {
         // 2. Dot "Hunting" Adjustment
         // If we see grey, nudge toward the dot to make sure we hit the black center
         int huntingOffset = 0;
-        if (light < GREY_THRESHOLD && !dotDetected) {
+        if (false && light < GREY_THRESHOLD && !dotDetected) {
             huntingOffset = 10; // Steer slightly right/left depending on dot side
         }
 
@@ -143,15 +154,16 @@ task main() {
 
         // 4. Collision Recovery
         if (Sensor(TOUCH_SENSOR)) {
-            OnRev(BOTH_MOTORS, BASE_SPEED); Wait(500);
-            OnFwd(LEFT_MOTOR, BASE_SPEED); OnRev(RIGHT_MOTOR, BASE_SPEED); Wait(600);
+            Off(BOTH_MOTORS);
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360);
+            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);
         } else {
             OnFwd(LEFT_MOTOR, lSpd);
             OnFwd(RIGHT_MOTOR, rSpd);
         }
 
         if (dotDetected) PlaySound(SOUND_CLICK);
-        
+
         Wait(40); // 25Hz sampling
     }
 

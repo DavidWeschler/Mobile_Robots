@@ -16,7 +16,7 @@ anchors_mask = reduced_data[:, 2] == 1
 # 2. Identify Loop Closures (Radius Search)
 anchors_found = []
 loop_closures = []
-threshold = 25.0 # 25cm radius
+threshold = 10.0 # 25cm radius
 
 for i in range(len(reduced_data)):
     if anchors_mask[i]:
@@ -53,7 +53,7 @@ initial_guess = np.column_stack((raw_x, raw_y)).flatten()
 res = minimize(fast_objective, initial_guess, 
                args=(raw_x, raw_y, loop_closures), 
                method='L-BFGS-B', 
-               options={'maxiter': 100})
+               options={'maxiter': 1000})
 
 optimized_poses = res.x.reshape(-1, 2)
 

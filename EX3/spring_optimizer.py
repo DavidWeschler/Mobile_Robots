@@ -2,60 +2,66 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-# 1. Load your data (x, y, is_anchor)
-data = np.genfromtxt('SLAM_DATA.TXT', delimiter=',')
-raw_x, raw_y = data[:, 0], data[:, 1]
+# 1. Load and Downsample
+data = np.genfromtxt('SLAM.TXT', delimiter=',')
+# Only take every 5th point to speed up optimization, but KEEP all anchors
 is_anchor = data[:, 2] == 1
+indices_to_keep = np.where(is_anchor | (np.arange(len(data)) % 5 == 0))[0]
 
-# 2. Identify Loop Closures
-# We find indices where the robot saw an anchor it had seen before
+reduced_data = data[indices_to_keep]
+raw_x = reduced_data[:, 0]
+raw_y = reduced_data[:, 1]
+anchors_mask = reduced_data[:, 2] == 1
+
+# 2. Identify Loop Closures (Radius Search)
 anchors_found = []
-loop_closures = [] # Stores (current_index, first_seen_index)
+loop_closures = []
+threshold = 25.0 # 25cm radius
 
-threshold = 20.0 # 20cm radius to consider it the "same" anchor
-for i in range(len(data)):
-    if is_anchor[i]:
+for i in range(len(reduced_data)):
+    if anchors_mask[i]:
         current_p = np.array([raw_x[i], raw_y[i]])
         match_found = False
         for prev_idx in anchors_found:
             prev_p = np.array([raw_x[prev_idx], raw_y[prev_idx]])
             if np.linalg.norm(current_p - prev_p) < threshold:
-                loop_closures.append((i, prev_idx))
-                match_found = True
-                break
+                if abs(i - prev_idx) > 50: # Avoid matching the same dot twice in a row
+                    loop_closures.append((i, prev_idx))
+                    match_found = True
+                    break
         if not match_found:
             anchors_found.append(i)
 
-# 3. The "Spring" Optimization (Objective Function)
-def objective_function(flat_poses, raw_x, raw_y, loop_closures):
+# 3. Fast Optimization Function
+def fast_objective(flat_poses, raw_x, raw_y, loop_closures):
     poses = flat_poses.reshape(-1, 2)
-    error = 0
     
-    # Odometry Springs: Keep points near their original relative distance
-    # Stiffness (Weight) for odometry is 1.0
-    for i in range(1, len(poses)):
-        actual_dist = poses[i] - poses[i-1]
-        original_dist = np.array([raw_x[i]-raw_x[i-1], raw_y[i]-raw_y[i-1]])
-        error += np.sum((actual_dist - original_dist)**2)
+    # Vectorized Odometry Error (Much faster than loops)
+    diffs = np.diff(poses, axis=0)
+    orig_diffs = np.diff(np.column_stack((raw_x, raw_y)), axis=0)
+    odom_error = np.sum((diffs - orig_diffs)**2)
+    
+    # Loop Closure Error
+    loop_error = 0
+    for curr, prev in loop_closures:
+        loop_error += 50.0 * np.sum((poses[curr] - poses[prev])**2)
         
-    # Loop Closure Springs: Pull matching anchors together
-    # Stiffness is much higher (10.0) because we know these are the same point
-    for curr_idx, prev_idx in loop_closures:
-        dist = poses[curr_idx] - poses[prev_idx]
-        error += 10.0 * np.sum(dist**2)
-        
-    return error
+    return odom_error + loop_error
 
-# 4. Run Optimization
+# 4. Minimize using 'L-BFGS-B' (Faster for large datasets)
 initial_guess = np.column_stack((raw_x, raw_y)).flatten()
-res = minimize(objective_function, initial_guess, args=(raw_x, raw_y, loop_closures))
+res = minimize(fast_objective, initial_guess, 
+               args=(raw_x, raw_y, loop_closures), 
+               method='L-BFGS-B', 
+               options={'maxiter': 100})
+
 optimized_poses = res.x.reshape(-1, 2)
 
-# 5. Visual Comparison
-plt.figure(figsize=(12, 6))
-plt.plot(raw_x, raw_y, 'r--', label='Raw Odometry (Drifted)', alpha=0.5)
-plt.plot(optimized_poses[:,0], optimized_poses[:,1], 'b-', label='Optimized (Loop Closure)')
-plt.scatter(optimized_poses[is_anchor, 0], optimized_poses[is_anchor, 1], color='black', label='Anchors')
+# 5. Result
+plt.figure(figsize=(10, 6))
+plt.plot(raw_x, raw_y, 'r--', label='Drifted Path', alpha=0.3)
+plt.plot(optimized_poses[:,0], optimized_poses[:,1], 'b-', label='SLAM Corrected')
+plt.scatter(optimized_poses[anchors_mask, 0], optimized_poses[anchors_mask, 1], c='black', label='Anchors')
 plt.legend()
-plt.title("Spring-Based Loop Closure (Pose Graph Optimization)")
+plt.axis('equal')
 plt.show()

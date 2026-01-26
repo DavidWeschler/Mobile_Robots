@@ -1,0 +1,162 @@
+// ==================================================================
+// SLAM DATA LOGGER + WALL FOLLOWER
+// ==================================================================
+
+#define RIGHT_MOTOR     OUT_A
+#define LEFT_MOTOR      OUT_B
+#define BOTH_MOTORS     OUT_AB
+
+#define ULTRASONIC_SENSOR S4
+#define TOUCH_SENSOR    S1
+#define COLOR_SENSOR    S3   // Light/Color sensor for dots
+
+// --- PHYSICAL CONSTANTS ---
+const float WHEEL_DIAMETER = 5.6;
+const float TRACK_WIDTH    = 11.8;
+
+// --- MAPPING CONFIGURATION ---
+#define MAX_POINTS 2000         
+#define MIN_SAVE_DIST 2.0       
+#define BLACK_THRESHOLD 35      // Adjust for your floor vs dots
+#define GREY_THRESHOLD 50       // For "hunting" the dot
+
+// --- MEMORY ARRAYS ---
+float pathX[MAX_POINTS];
+float pathY[MAX_POINTS];
+bool  isAnchor[MAX_POINTS];
+int pointCount = 0;
+
+// --- ODOMETRY VARIABLES ---
+float x_cm = 0.0;
+float y_cm = 0.0;
+float theta_rad = 1.57; // Start facing UP (90 deg)
+long old_enc_left = 0;
+long old_enc_right = 0;
+
+// --- PID & NAVIGATION ---
+const int TARGET_DISTANCE = 30;
+const int BASE_SPEED = 45;
+const float KP = 1.1;
+const float KD = 12.0;
+
+// ------------------------------------------------------------------
+// ODOMETRY CALCULATION
+// ------------------------------------------------------------------
+void UpdateOdometry(bool foundDot) {
+    long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
+    long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
+
+    long d_ticks_left  = curr_enc_left  - old_enc_left;
+    long d_ticks_right = curr_enc_right - old_enc_right;
+
+    old_enc_left  = curr_enc_left;
+    old_enc_right = curr_enc_right;
+
+    float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
+    float d_left  = d_ticks_left  * dist_per_tick;
+    float d_right = d_ticks_right * dist_per_tick;
+
+    float d_center = (d_left + d_right) / 2.0;
+    float d_theta  = (d_right - d_left) / TRACK_WIDTH;
+
+    float avg_theta = theta_rad + (d_theta / 2.0);
+    x_cm += d_center * cos(avg_theta);
+    y_cm += d_center * sin(avg_theta);
+    theta_rad += d_theta;
+
+    // SAVE LOGIC
+    if (pointCount < MAX_POINTS) {
+        float dist_sq = 0;
+        if (pointCount > 0) {
+            float dx = x_cm - pathX[pointCount-1];
+            float dy = y_cm - pathY[pointCount-1];
+            dist_sq = dx*dx + dy*dy;
+        }
+
+        // Save if moved enough OR if we just hit an anchor
+        if (pointCount == 0 || dist_sq >= (MIN_SAVE_DIST * MIN_SAVE_DIST) || foundDot) {
+            pathX[pointCount] = x_cm;
+            pathY[pointCount] = y_cm;
+            isAnchor[pointCount] = foundDot;
+            pointCount++;
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// DATA EXPORT (Run at end)
+// ------------------------------------------------------------------
+void SaveToFlash() {
+    byte fileHandle;
+    short fileSize = pointCount * 25; // Estimate size
+    string filename = "SLAM.TXT";
+    unsigned int bw = 0;
+
+    DeleteFile(filename);
+    if (CreateFile(filename, fileSize, fileHandle) == LDR_SUCCESS) {
+        for (int i = 0; i < pointCount; i++) {
+            string sx = NumToStr(pathX[i]);
+            string sy = NumToStr(pathY[i]);
+            string sa = NumToStr(isAnchor[i]);
+            string line = StrCat(sx, ",", sy, ",", sa, "\n");
+            WriteString(fileHandle, line, bw);
+        }
+        CloseFile(fileHandle);
+        TextOut(0, LCD_LINE1, "SAVE SUCCESS");
+    }
+}
+
+// ------------------------------------------------------------------
+// MAIN CONTROL
+// ------------------------------------------------------------------
+task main() {
+    SetSensorLowspeed(ULTRASONIC_SENSOR);
+    SetSensorTouch(TOUCH_SENSOR);
+    SetSensorLight(COLOR_SENSOR);
+
+    ResetTachoCount(BOTH_MOTORS);
+    int lastError = 0;
+
+    while (!ButtonState(BTNCENTER)) { // Run until center button pressed
+        
+        int dist = SensorUS(ULTRASONIC_SENSOR);
+        int light = Sensor(COLOR_SENSOR);
+        bool dotDetected = (light < BLACK_THRESHOLD);
+
+        // 1. Update Position & Record Anchors
+        UpdateOdometry(dotDetected);
+
+        // 2. Dot "Hunting" Adjustment
+        // If we see grey, nudge toward the dot to make sure we hit the black center
+        int huntingOffset = 0;
+        if (light < GREY_THRESHOLD && !dotDetected) {
+            huntingOffset = 10; // Steer slightly right/left depending on dot side
+        }
+
+        // 3. Wall Following PID
+        int error = dist - TARGET_DISTANCE;
+        float turnRatio = (KP * error) + (KD * (error - lastError));
+        lastError = error;
+
+        int lSpd = BASE_SPEED - turnRatio + huntingOffset;
+        int rSpd = BASE_SPEED + turnRatio - huntingOffset;
+
+        // 4. Collision Recovery
+        if (Sensor(TOUCH_SENSOR)) {
+            OnRev(BOTH_MOTORS, BASE_SPEED); Wait(500);
+            OnFwd(LEFT_MOTOR, BASE_SPEED); OnRev(RIGHT_MOTOR, BASE_SPEED); Wait(600);
+        } else {
+            OnFwd(LEFT_MOTOR, lSpd);
+            OnFwd(RIGHT_MOTOR, rSpd);
+        }
+
+        if (dotDetected) PlaySound(SOUND_CLICK);
+        
+        Wait(40); // 25Hz sampling
+    }
+
+    Off(BOTH_MOTORS);
+    SaveToFlash();
+    PlaySound(SOUND_UP);
+    Wait(2000);
+}

@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
 # 1. Load and Downsample
-data = np.genfromtxt('SLAM.TXT', delimiter=',')
+data = np.genfromtxt('EX3/SLAM.TXT', delimiter=',')
 # Only take every 5th point to speed up optimization, but KEEP all anchors
 is_anchor = data[:, 2] == 1
-indices_to_keep = np.where(is_anchor | (np.arange(len(data)) % 5 == 0))[0]
+indices_to_keep = np.where(is_anchor | (np.arange(len(data)) % 1 == 0))[0]
 
 reduced_data = data[indices_to_keep]
 raw_x = reduced_data[:, 0]

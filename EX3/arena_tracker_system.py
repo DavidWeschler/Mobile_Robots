@@ -50,7 +50,7 @@ class Config:
     # Pt 3: Bottom-Right (190, 237)
     # Pt 4: Bottom-Inner (89, 237) - where bottom meets diagonal
     # Pt 5: Left-Inner (0, 148) - where left meets diagonal
-    ARENA_DST_POINTS: tuple = (
+    ARENA_DST_POINTS: tuple = ( #זה מוריד 5 נקודות 
         (0, 0),       # Top-Left
         (190, 0),     # Top-Right  
         (190, 237),   # Bottom-Right

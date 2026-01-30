@@ -7,21 +7,21 @@
 #define BOTH_MOTORS     OUT_AB
 #define ULTRASONIC_SENSOR S4
 #define TOUCH_SENSOR    S1
-#define COLOR_SENSOR    S2 
+#define COLOR_SENSOR    S2
 
-const float WHEEL_DIAMETER = 5.6; 
-const float TRACK_WIDTH    = 11.8; 
+const float WHEEL_DIAMETER = 5.6;
+const float TRACK_WIDTH    = 11.8;
 
 #define MAX_POINTS 2000
-#define MIN_SAVE_DIST 5.0       
-#define BLACK_THRESHOLD 25      
+#define MIN_SAVE_DIST 5.0
+#define BLACK_THRESHOLD 25
 
 float pathX[MAX_POINTS];
 float pathY[MAX_POINTS];
 int markerType[MAX_POINTS]; // 0=path, 1=anchor, 2=collision
 int pointCount = 0;
 
-float x_cm = 0.0, y_cm = 0.0, theta_rad = 1.57; 
+float x_cm = 0.0, y_cm = 0.0, theta_rad = 1.57;
 long old_enc_left = 0, old_enc_right = 0;
 
 const int TARGET_DISTANCE = 32;
@@ -31,7 +31,7 @@ const float KD = 12.0;
 
 void LogPoint(int type) {
     if (pointCount >= MAX_POINTS) return;
-    
+
     float dist_sq = 0;
     if (pointCount > 0) {
         float dx = x_cm - pathX[pointCount-1];
@@ -52,10 +52,10 @@ float UpdateOdometry() {
     long curr_l = MotorRotationCount(LEFT_MOTOR);
     long curr_r = MotorRotationCount(RIGHT_MOTOR);
     float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
-    
+
     float d_left  = (curr_l - old_enc_left) * dist_per_tick;
     float d_right = (curr_r - old_enc_right) * dist_per_tick;
-    
+
     old_enc_left = curr_l; old_enc_right = curr_r;
 
     float d_center = (d_left + d_right) / 2.0;
@@ -65,7 +65,7 @@ float UpdateOdometry() {
     x_cm += d_center * cos(avg_theta);
     y_cm += d_center * sin(avg_theta);
     theta_rad += d_theta;
-    
+
     return abs(d_center);
 }
 
@@ -74,14 +74,14 @@ task main() {
     SetSensorTouch(TOUCH_SENSOR);
     SetSensorLight(COLOR_SENSOR);
     ResetTachoCount(BOTH_MOTORS);
-    
+
     int lastError = 0;
     float total_dist = 0.0;
 
     while (total_dist < 1100.0) {
         bool dot = (Sensor(COLOR_SENSOR) < BLACK_THRESHOLD);
         total_dist += UpdateOdometry();
-        
+
         // Log as Anchor(1) if dot found, otherwise regular Path(0)
         LogPoint(dot ? 1 : 0);
 
@@ -89,9 +89,9 @@ task main() {
             Off(BOTH_MOTORS);
             LogPoint(2); // Mark collision
             PlaySound(SOUND_LOW_BEEP);
-            RotateMotor(BOTH_MOTORS, BASE_SPEED, -200); // Back up
-            RotateMotor(LEFT_MOTOR, BASE_SPEED, 300);  // Turn
-            
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360); // Back up
+            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);  // Turn
+
             // Critical: Refresh encoders so the "jump" isn't calculated as a move
             old_enc_left = MotorRotationCount(LEFT_MOTOR);
             old_enc_right = MotorRotationCount(RIGHT_MOTOR);
@@ -112,7 +112,8 @@ task main() {
     if (CreateFile("SLAM.TXT", 30000, fh) == LDR_SUCCESS) {
         for (int i = 0; i < pointCount; i++) {
             string row = NumToStr(pathX[i]) + "," + NumToStr(pathY[i]) + "," + NumToStr(markerType[i]) + "\n";
-            WriteString(fh, row, 0);
+            byte b;
+            WriteString(fh, row, b);
         }
         CloseFile(fh);
     }

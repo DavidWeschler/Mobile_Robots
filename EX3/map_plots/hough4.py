@@ -4,7 +4,8 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
+# FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
+FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\RAW_LAP_ONLY.TXT"
 
 # --- TUNED PARAMETERS FOR YOUR DATA ---
 HOUGH_RHO_RES = 1.0      # 2cm grid for distance

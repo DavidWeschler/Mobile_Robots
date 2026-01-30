@@ -4,7 +4,8 @@ import math
 import random
 
 # --- Configuration ---
-FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
+# FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
+FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\RAW_LAP_ONLY.TXT"
 
 # --- TUNED PARAMETERS FOR RANSAC ---
 RANSAC_ITERATIONS = 100      # Number of RANSAC iterations per wall

@@ -35,7 +35,7 @@ from typing import Optional, List, Tuple
 class Config:
     """All configuration settings in one place"""
     # Camera Settings
-    CAMERA_INDEX: int = 2  # 0, 1, or 2 (phone link via DroidCam is usually 2)
+    CAMERA_INDEX: int = 1  # 0, 1, or 2 (phone link via DroidCam is usually 2)
     CAMERA_BACKEND: int = cv2.CAP_MSMF  # CAP_DSHOW or CAP_MSMF
     DISPLAY_SCALE: float = 0.7  # Scale factor for display
     
@@ -465,6 +465,9 @@ class ArenaTrackerSystem:
         self.calibration_frame = None
         self.calibration_display = None
         
+        # Panel width (used for mouse coordinate offset)
+        self.panel_width = 320
+        
     def initialize_camera(self) -> bool:
         """Initializes the camera"""
         print(f"📷 Opening camera {self.config.CAMERA_INDEX}...")
@@ -484,15 +487,109 @@ class ArenaTrackerSystem:
     def _mouse_callback(self, event, x, y, flags, param):
         """Mouse callback for manual corner selection (works with live feed)"""
         if event == cv2.EVENT_LBUTTONDOWN:
+            # Adjust x coordinate for panel offset (camera is on the right of panel)
+            adjusted_x = x - self.panel_width
+            
+            # Only accept clicks on the camera view (right side of panel)
+            if adjusted_x < 0:
+                return  # Click was on the panel, ignore
+            
             num_points = self.config.NUM_CALIBRATION_POINTS
             if len(self.calibration_points) < num_points:
-                self.calibration_points.append((x, y))
-                print(f"   Point {len(self.calibration_points)}: ({x}, {y})")
+                self.calibration_points.append((adjusted_x, y))
+                print(f"   Point {len(self.calibration_points)}: ({adjusted_x}, {y})")
+    
+    def draw_calibration_panel(self, height: int) -> np.ndarray:
+        """
+        Creates a side panel for calibration mode with instructions.
+        Similar layout to the main tracking panel for consistency.
+        """
+        panel = np.zeros((height, self.panel_width, 3), dtype=np.uint8)
+        
+        # Title with background
+        cv2.rectangle(panel, (5, 5), (self.panel_width - 5, 35), (50, 50, 50), -1)
+        cv2.putText(panel, "Arena Calibration", (10, 28),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        y_offset = 55
+        num_points = self.config.NUM_CALIBRATION_POINTS
+        
+        # Status section
+        points_selected = len(self.calibration_points)
+        status_color = (0, 255, 0) if points_selected == num_points else (0, 255, 255)
+        cv2.putText(panel, f"Points: {points_selected}/{num_points}", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+        y_offset += 30
+        
+        # Progress bar
+        bar_width = self.panel_width - 40
+        bar_height = 15
+        progress = points_selected / num_points
+        cv2.rectangle(panel, (20, y_offset), (20 + bar_width, y_offset + bar_height), (50, 50, 50), -1)
+        cv2.rectangle(panel, (20, y_offset), (20 + int(bar_width * progress), y_offset + bar_height), status_color, -1)
+        cv2.rectangle(panel, (20, y_offset), (20 + bar_width, y_offset + bar_height), (100, 100, 100), 1)
+        y_offset += 35
+        
+        # Separator
+        cv2.line(panel, (10, y_offset), (self.panel_width - 10, y_offset), (100, 100, 100), 1)
+        y_offset += 15
+        
+        # Instructions header
+        cv2.putText(panel, "Click corners in order:", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y_offset += 25
+        
+        # List expected corners with checkmarks
+        for i, pt in enumerate(self.config.ARENA_DST_POINTS):
+            if i < points_selected:
+                # Already clicked - show checkmark
+                color = (0, 255, 0)
+                prefix = "[X]"
+            elif i == points_selected:
+                # Next to click - highlight
+                color = (0, 255, 255)
+                prefix = ">>>"
+            else:
+                # Not yet
+                color = (150, 150, 150)
+                prefix = "[ ]"
+            
+            text = f"{prefix} {i+1}: ({pt[0]}, {pt[1]}) cm"
+            cv2.putText(panel, text, (15, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+            y_offset += 22
+        
+        y_offset += 10
+        
+        # Separator
+        cv2.line(panel, (10, y_offset), (self.panel_width - 10, y_offset), (100, 100, 100), 1)
+        y_offset += 15
+        
+        # Confirmation message when all points selected
+        if points_selected == num_points:
+            cv2.rectangle(panel, (5, y_offset - 5), (self.panel_width - 5, y_offset + 45), (0, 100, 0), -1)
+            cv2.putText(panel, "All points selected!", (10, y_offset + 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+            cv2.putText(panel, "Press ENTER to confirm", (10, y_offset + 35),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            y_offset += 55
+        
+        # Controls at bottom
+        cv2.putText(panel, "Controls:", (10, height - 70),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
+        cv2.putText(panel, "'r' - Reset points", (10, height - 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        cv2.putText(panel, "ESC - Cancel calibration", (10, height - 35),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        cv2.putText(panel, "ENTER - Confirm (when done)", (10, height - 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        
+        return panel
     
     def run_manual_calibration(self) -> bool:
         """
         Runs the manual calibration process where user clicks arena corners.
-        Shows LIVE camera feed so user can see the arena.
+        Uses the same side panel + camera layout as the main tracking view.
         Returns True if calibration successful.
         """
         print("\n" + "="*60)
@@ -518,8 +615,8 @@ class ArenaTrackerSystem:
         
         self.calibration_points = []
         
-        # Setup mouse callback
-        window_name = "Arena Calibration - Click Corners (LIVE)"
+        # Use same window as main tracking for consistency
+        window_name = "Arena Tracker System"
         cv2.namedWindow(window_name)
         cv2.setMouseCallback(window_name, self._mouse_callback)
         
@@ -537,16 +634,8 @@ class ArenaTrackerSystem:
                               fx=self.config.DISPLAY_SCALE, 
                               fy=self.config.DISPLAY_SCALE)
             
+            h, w = frame.shape[:2]
             display = frame.copy()
-            
-            # Draw instructions overlay
-            cv2.rectangle(display, (5, 5), (450, 90), (0, 0, 0), -1)
-            cv2.putText(display, f"Click {num_points} corners in order", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            cv2.putText(display, "Press 'r' to reset, ESC to cancel", 
-                       (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(display, "Press ENTER when done selecting all points", 
-                       (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             # Draw already selected points on live feed
             for i, pt in enumerate(self.calibration_points):
@@ -560,25 +649,30 @@ class ArenaTrackerSystem:
                 for i in range(len(self.calibration_points) - 1):
                     cv2.line(display, self.calibration_points[i], self.calibration_points[i+1], (0, 255, 0), 2)
             
-            # Show point count
-            h = display.shape[0]
-            status_color = (0, 255, 0) if len(self.calibration_points) == num_points else (0, 255, 255)
-            cv2.putText(display, f"Points: {len(self.calibration_points)}/{num_points}", 
-                       (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
-            
-            # Show confirmation message when all points selected
+            # Close polygon if all points selected
             if len(self.calibration_points) == num_points:
-                cv2.putText(display, "All points selected! Press ENTER to confirm...", 
-                           (10, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.line(display, self.calibration_points[-1], self.calibration_points[0], (0, 255, 0), 2)
             
-            cv2.imshow(window_name, display)
+            # Draw crosshair hint for next point (visual feedback)
+            if len(self.calibration_points) < num_points:
+                next_pt_idx = len(self.calibration_points) + 1
+                cv2.putText(display, f"Click point {next_pt_idx}", (w//2 - 80, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
+            # Create calibration side panel
+            side_panel = self.draw_calibration_panel(h)
+            
+            # Combine: side panel on left, camera on right (same as main tracking)
+            combined = np.hstack([side_panel, display])
+            
+            cv2.imshow(window_name, combined)
             
             key = cv2.waitKey(30) & 0xFF
             
             # ESC to cancel
             if key == 27:
                 print("❌ Calibration cancelled by user")
-                cv2.destroyWindow(window_name)
+                cv2.setMouseCallback(window_name, lambda *args: None)  # Remove callback
                 return False
             
             # 'r' to reset
@@ -590,7 +684,8 @@ class ArenaTrackerSystem:
             if key == 13 and len(self.calibration_points) == num_points:  # 13 is Enter key
                 break
         
-        cv2.destroyWindow(window_name)
+        # Remove calibration mouse callback (will be re-set if needed)
+        cv2.setMouseCallback(window_name, lambda *args: None)
         
         # Perform calibration with selected points
         success = self.arena_detector.calibrate_with_points(self.calibration_points)
@@ -608,11 +703,10 @@ class ArenaTrackerSystem:
         Creates a side panel with UI info and 2D map.
         This keeps the camera view unobstructed.
         """
-        panel_width = 320
-        panel = np.zeros((height, panel_width, 3), dtype=np.uint8)
+        panel = np.zeros((height, self.panel_width, 3), dtype=np.uint8)
         
         # Title with background
-        cv2.rectangle(panel, (5, 5), (panel_width - 5, 35), (50, 50, 50), -1)
+        cv2.rectangle(panel, (5, 5), (self.panel_width - 5, 35), (50, 50, 50), -1)
         cv2.putText(panel, "Arena Tracker System", (10, 28),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
@@ -659,7 +753,7 @@ class ArenaTrackerSystem:
         y_offset += 35
         
         # Separator line
-        cv2.line(panel, (10, y_offset), (panel_width - 10, y_offset), (100, 100, 100), 1)
+        cv2.line(panel, (10, y_offset), (self.panel_width - 10, y_offset), (100, 100, 100), 1)
         y_offset += 10
         
         # 2D Map section
@@ -668,7 +762,7 @@ class ArenaTrackerSystem:
         y_offset += 25
         
         # Draw 2D map in the panel
-        map_size = min(panel_width - 20, height - y_offset - 80)
+        map_size = min(self.panel_width - 20, height - y_offset - 80)
         if map_size > 50:
             map_view = self.draw_2d_map((map_size, map_size))
             panel[y_offset:y_offset + map_size, 10:10 + map_size] = map_view

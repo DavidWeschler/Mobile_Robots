@@ -1,5 +1,5 @@
 // ==================================================================
-// SLAM DATA LOGGER - FINAL VERSION (11m Limit + Collision Markers)
+// SLAM DATA LOGGER - 10M WALL LIMIT VERSION
 // ==================================================================
 
 #define RIGHT_MOTOR     OUT_A
@@ -16,9 +16,12 @@ const float TRACK_WIDTH    = 11.8;
 #define MIN_SAVE_DIST 5.0
 #define BLACK_THRESHOLD 25
 
+// --- MEMORY ARRAYS ---
 float pathX[MAX_POINTS];
 float pathY[MAX_POINTS];
-int markerType[MAX_POINTS]; // 0=path, 1=anchor, 2=collision
+float wallX[MAX_POINTS];
+float wallY[MAX_POINTS];
+int markerType[MAX_POINTS]; 
 int pointCount = 0;
 
 float x_cm = 0.0, y_cm = 0.0, theta_rad = 1.57;
@@ -29,7 +32,10 @@ const int BASE_SPEED = 45;
 const float KP = 1.1;
 const float KD = 12.0;
 
-void LogPoint(int type) {
+// ------------------------------------------------------------------
+// LOGGING FUNCTION (5 COLUMNS)
+// ------------------------------------------------------------------
+void LogPoint(int type, int us_dist) {
     if (pointCount >= MAX_POINTS) return;
 
     float dist_sq = 0;
@@ -39,23 +45,31 @@ void LogPoint(int type) {
         dist_sq = dx*dx + dy*dy;
     }
 
-    // Save if moved 5cm OR if it's a special event (dot/collision)
     if (pointCount == 0 || dist_sq >= (MIN_SAVE_DIST * MIN_SAVE_DIST) || type > 0) {
         pathX[pointCount] = x_cm;
         pathY[pointCount] = y_cm;
+        
+        // Project wall point (Sensor usually on the right/left)
+        // Using theta_rad + PI/2 assuming sensor faces "out" from the side
+        float wall_angle = theta_rad + (PI / 2.0); 
+        wallX[pointCount] = x_cm + (us_dist * cos(wall_angle));
+        wallY[pointCount] = y_cm + (us_dist * sin(wall_angle));
+        
         markerType[pointCount] = type;
         pointCount++;
     }
 }
 
-float UpdateOdometry() {
+// ------------------------------------------------------------------
+// ODOMETRY
+// ------------------------------------------------------------------
+void UpdateOdometry() {
     long curr_l = MotorRotationCount(LEFT_MOTOR);
     long curr_r = MotorRotationCount(RIGHT_MOTOR);
     float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
 
     float d_left  = (curr_l - old_enc_left) * dist_per_tick;
     float d_right = (curr_r - old_enc_right) * dist_per_tick;
-
     old_enc_left = curr_l; old_enc_right = curr_r;
 
     float d_center = (d_left + d_right) / 2.0;
@@ -65,10 +79,11 @@ float UpdateOdometry() {
     x_cm += d_center * cos(avg_theta);
     y_cm += d_center * sin(avg_theta);
     theta_rad += d_theta;
-
-    return abs(d_center);
 }
 
+// ------------------------------------------------------------------
+// MAIN TASK
+// ------------------------------------------------------------------
 task main() {
     SetSensorLowspeed(ULTRASONIC_SENSOR);
     SetSensorTouch(TOUCH_SENSOR);
@@ -76,43 +91,54 @@ task main() {
     ResetTachoCount(BOTH_MOTORS);
 
     int lastError = 0;
-    float total_dist = 0.0;
+    float wall_length_total = 0.0;
 
-    while (total_dist < 1100.0) {
+    while (wall_length_total < 1000.0) { // Stop at 1000cm (10 meters) of wall
+        int us_val = SensorUS(ULTRASONIC_SENSOR);
         bool dot = (Sensor(COLOR_SENSOR) < BLACK_THRESHOLD);
-        total_dist += UpdateOdometry();
-
-        // Log as Anchor(1) if dot found, otherwise regular Path(0)
-        LogPoint(dot ? 1 : 0);
+        
+        UpdateOdometry();
 
         if (Sensor(TOUCH_SENSOR)) {
             Off(BOTH_MOTORS);
-            LogPoint(2); // Mark collision
-            PlaySound(SOUND_LOW_BEEP);
-            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360); // Back up
-            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);  // Turn
-
-            // Critical: Refresh encoders so the "jump" isn't calculated as a move
+            LogPoint(2, us_val); 
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360);
+            RotateMotor(LEFT_MOTOR, BASE_SPEED, 360);
             old_enc_left = MotorRotationCount(LEFT_MOTOR);
             old_enc_right = MotorRotationCount(RIGHT_MOTOR);
         } else {
-            int error = SensorUS(ULTRASONIC_SENSOR) - TARGET_DISTANCE;
+            LogPoint(dot ? 1 : 0, us_val);
+            
+            // Calculate distance between current wall point and previous wall point
+            if (pointCount > 1) {
+                float dwx = wallX[pointCount-1] - wallX[pointCount-2];
+                float dwy = wallY[pointCount-1] - wallY[pointCount-2];
+                wall_length_total += sqrt(dwx*dwx + dwy*dwy);
+            }
+
+            int error = us_val - TARGET_DISTANCE;
             float turn = (KP * error) + (KD * (error - lastError));
             lastError = error;
             OnFwd(LEFT_MOTOR, BASE_SPEED - turn);
             OnFwd(RIGHT_MOTOR, BASE_SPEED + turn);
         }
+
+        // Show wall progress on screen
+        NumOut(0, LCD_LINE1, wall_length_total);
+        TextOut(60, LCD_LINE1, "/ 1000");
+
         Wait(40);
     }
 
     Off(BOTH_MOTORS);
-    // SAVE FILE
     byte fh;
+    unsigned int b;
     DeleteFile("SLAM.TXT");
-    if (CreateFile("SLAM.TXT", 30000, fh) == LDR_SUCCESS) {
+    if (CreateFile("SLAM.TXT", 50000, fh) == LDR_SUCCESS) {
         for (int i = 0; i < pointCount; i++) {
-            string row = NumToStr(pathX[i]) + "," + NumToStr(pathY[i]) + "," + NumToStr(markerType[i]) + "\n";
-            byte b;
+            string row = NumToStr(pathX[i]) + "," + NumToStr(pathY[i]) + "," + 
+                         NumToStr(wallX[i]) + "," + NumToStr(wallY[i]) + "," + 
+                         NumToStr(markerType[i]) + "\n";
             WriteString(fh, row, b);
         }
         CloseFile(fh);

@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 # --- Configuration ---
 # FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
 # FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\map_plots\\SLAM_PATH.TXT"
-FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\RAW_LAP_ONLY.TXT"
+# FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\RAW_LAP_ONLY.TXT"
+FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
 
 def main():
     print(f"Loading data from: {FILE_NAME}")
@@ -13,6 +14,10 @@ def main():
     x = data[:, 0]
     y = data[:, 1]
     # t = data[:, 2]  # ignored
+
+    # // x is the third col and y is the forth col
+    # x = data[:, 2]
+    # y = data[:, 3]
     
     print(f"Loaded {len(x)} points")
     

@@ -3,127 +3,140 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
 # ==================================================================
-# 1. LOAD DATA
+# 1. LOAD DATA (5 COLUMNS)
 # ==================================================================
 file_path = 'EX3/SLAM.TXT'
 try:
-    # Format: x, y, marker (0=path, 1=anchor, 2=collision)
+    # Input Format: RobotX, RobotY, WallX, WallY, Marker
     data = np.genfromtxt(file_path, delimiter=',')
-    raw_x, raw_y, types = data[:, 0], data[:, 1], data[:, 2]
+    
+    # Extract Robot Trajectory
+    raw_rx, raw_ry = data[:, 0], data[:, 1]
+    
+    # Extract Wall Coordinates
+    raw_wx, raw_wy = data[:, 2], data[:, 3]
+    
+    # Extract Markers
+    types = data[:, 4]
+    
     is_anchor = (types == 1)
     is_collision = (types == 2)
-    print(f"Successfully loaded {len(data)} points from {file_path}")
+    print(f"Successfully loaded {len(data)} points with 5 columns.")
 except Exception as e:
-    print(f"Error loading file: {e}. Check if the file exists in the directory.")
+    print(f"Error loading file: {e}")
     exit()
 
 # ==================================================================
-# 2. IDENTIFY LOOP CLOSURES & ROUNDS
+# 2. IDENTIFY LOOP CLOSURES
 # ==================================================================
 anchors_found_indices = []
 loop_closures = []
 rounds_completed = 0
 
-# Adjusted threshold to handle large drifts (~150cm)
-threshold = 150.0 
-min_index_gap = 50 # Prevents matching the same dot immediately
+threshold = 50.0 
+min_index_gap = 100  # Minimum index gap to avoid trivial closures
 
 anchor_indices = np.where(is_anchor)[0]
 
 for i in anchor_indices:
-    current_p = np.array([raw_x[i], raw_y[i]])
+    current_p = np.array([raw_rx[i], raw_ry[i]])
     for prev_idx in anchors_found_indices:
-        prev_p = np.array([raw_x[prev_idx], raw_y[prev_idx]])
+        prev_p = np.array([raw_rx[prev_idx], raw_ry[prev_idx]])
         dist = np.linalg.norm(current_p - prev_p)
         
         if dist < threshold and (i - prev_idx) > min_index_gap:
             loop_closures.append((i, prev_idx))
-            # If we returned to the very first anchor seen, count a round
             if prev_idx == anchor_indices[0]:
                 rounds_completed += 1
     
     anchors_found_indices.append(i)
 
-# FORCE CLOSURE FALLBACK: If no loops found, match the last anchor to the first
 if len(loop_closures) == 0 and len(anchor_indices) >= 2:
     print("No loops found automatically. Forcing first/last closure...")
     loop_closures.append((anchor_indices[-1], anchor_indices[0]))
     rounds_completed = 1
 
 print(f"Detected Rounds: {rounds_completed}")
-print(f"Total Loop Closures (Springs): {len(loop_closures)}")
 
 # ==================================================================
-# 3. GLOBAL OPTIMIZATION (THE "FIX")
+# 3. GLOBAL OPTIMIZATION (Trajectory Only)
 # ==================================================================
 def slam_objective(flat_poses, rx, ry, closures):
     poses = flat_poses.reshape(-1, 2)
-    # Odometry Error (Stiffness 1.0)
+    # Odometry Error
     diffs = np.diff(poses, axis=0)
     orig_diffs = np.diff(np.column_stack((rx, ry)), axis=0)
     odom_err = np.sum((diffs - orig_diffs)**2)
     
-    # Loop Closure Error (Stiffness 50,000)
+    # Loop Closure Error
     loop_err = 0
     for curr, prev in closures:
         loop_err += 50000.0 * np.sum((poses[curr] - poses[prev])**2)
     return odom_err + loop_err
 
-initial_guess = np.column_stack((raw_x, raw_y)).flatten()
-res = minimize(slam_objective, initial_guess, args=(raw_x, raw_y, loop_closures), 
+initial_guess = np.column_stack((raw_rx, raw_ry)).flatten()
+res = minimize(slam_objective, initial_guess, args=(raw_rx, raw_ry, loop_closures), 
                method='L-BFGS-B', options={'maxiter': 2000})
 
-optimized_poses = res.x.reshape(-1, 2)
+opt_rx = res.x.reshape(-1, 2)[:, 0]
+opt_ry = res.x.reshape(-1, 2)[:, 1]
 
 # ==================================================================
-# 4. FILTER BOUNDS & EXPORT FILES
+# 4. CORRECT WALL POSITIONS
 # ==================================================================
-# Identify the start of the first closure and end of the last closure
+# Calculate the relative offset of the wall from the robot in the RAW data
+offset_wx = raw_wx - raw_rx
+offset_wy = raw_wy - raw_ry
+
+# Apply that same offset to the NEW optimized robot path
+opt_wx = opt_rx + offset_wx
+opt_wy = opt_ry + offset_wy
+
+# ==================================================================
+# 5. FILTER & EXPORT
+# ==================================================================
 start_idx = min([c[1] for c in loop_closures])
 end_idx = max([c[0] for c in loop_closures])
 
-# --- FILE A: SLAM_CLEANED.TXT (The Fixed Map) ---
-final_x = optimized_poses[start_idx:end_idx+1, 0]
-final_y = optimized_poses[start_idx:end_idx+1, 1]
-final_types = types[start_idx:end_idx+1]
+# --- OPTION A: Save OPTIMIZED (Fixed) Map ---
+# final_rx = opt_rx[start_idx:end_idx+1]
+# final_ry = opt_ry[start_idx:end_idx+1]
+# final_wx = opt_wx[start_idx:end_idx+1]
+# final_wy = opt_wy[start_idx:end_idx+1]
 
-output_cleaned = np.column_stack((final_x, final_y, final_types))
-np.savetxt('EX3/SLAM_CLEANED.TXT', output_cleaned, delimiter=',', fmt='%.2f,%.2f,%d')
+# --- OPTION B: Save RAW (Drifted) Map (Truncated) ---
+final_rx = raw_rx[start_idx:end_idx+1]
+final_ry = raw_ry[start_idx:end_idx+1]
+final_wx = raw_wx[start_idx:end_idx+1]
+final_wy = raw_wy[start_idx:end_idx+1]
 
-# --- FILE B: RAW_LAP_ONLY.TXT (Plot 2 Style - No points outside anchors) ---
-raw_lap_x = raw_x[start_idx:end_idx+1]
-raw_lap_y = raw_y[start_idx:end_idx+1]
-raw_lap_types = types[start_idx:end_idx+1]
+# Stack and Save
+output_data = np.column_stack((final_rx, final_ry, final_wx, final_wy))
+np.savetxt('EX3/SLAM_CLEANED.TXT', output_data, delimiter=',', fmt='%.2f')
 
-output_raw_lap = np.column_stack((raw_lap_x, raw_lap_y, raw_lap_types))
-np.savetxt('EX3/RAW_LAP_ONLY.TXT', output_raw_lap, delimiter=',', fmt='%.2f,%.2f,%d')
-
-print(f"Exported SLAM_CLEANED.TXT and RAW_LAP_ONLY.TXT ({len(output_cleaned)} points each).")
+print(f"Exported {len(output_data)} rows. (Type: OPTIMIZED)")
 
 # ==================================================================
-# 5. VISUALIZATION
+# 6. VISUALIZATION
 # ==================================================================
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
 
-# PLOT 1: FULL RAW DATA
-ax1.plot(raw_x, raw_y, color='gray', alpha=0.5)
-ax1.scatter(raw_x[0], raw_y[0], color='green', marker='P', s=100, label='Start')
-ax1.set_title("1. Full Raw Recording")
+# Plot 1: Raw Data
+ax1.plot(raw_rx, raw_ry, color='blue', alpha=0.5, label='Robot Path')
+ax1.scatter(raw_wx, raw_wy, color='gray', s=1, alpha=0.3, label='Walls')
+ax1.set_title("1. Raw Data (Drifted)")
+ax1.legend()
 
-# PLOT 2: TRUNCATED RAW WITH CONNECTIONS
-ax2.plot(raw_lap_x, raw_lap_y, color='gray', alpha=0.2)
-ax2.scatter(raw_lap_x[raw_lap_types==1], raw_lap_y[raw_lap_types==1], c='blue', s=15)
+# Plot 2: Loop Closures
+ax2.plot(raw_rx, raw_ry, color='gray', alpha=0.3)
 for c in loop_closures:
-    # Adjust closure indices for the truncated plot
-    ax2.plot([raw_x[c[0]], raw_x[c[1]]], [raw_y[c[0]], raw_y[c[1]]], 'g--', alpha=0.6)
-ax2.set_title(f"2. Truncated Raw & {rounds_completed} Rounds")
+    ax2.plot([raw_rx[c[0]], raw_rx[c[1]]], [raw_ry[c[0]], raw_ry[c[1]]], 'g--', alpha=0.6)
+ax2.set_title(f"2. {len(loop_closures)} Loop Closures")
 
-# PLOT 3: FINAL SLAM RESULT
-ax3.plot(final_x, final_y, color='blue', linewidth=2, label='Optimized Loop')
-ax3.scatter(final_x[final_types==1], final_y[final_types==1], c='black', marker='*', s=50, label='Anchors')
-if any(final_types == 2):
-    ax3.scatter(final_x[final_types==2], final_y[final_types==2], c='red', marker='x', label='Collisions')
-ax3.set_title("3. Final SLAM Result")
+# Plot 3: Final Result (Path + Walls)
+ax3.plot(final_rx, final_ry, color='blue', linewidth=2, label='Corrected Path')
+ax3.scatter(final_wx, final_wy, color='black', s=5, alpha=0.6, label='Corrected Walls')
+ax3.set_title("3. Final SLAM Map")
 ax3.legend()
 
 for ax in [ax1, ax2, ax3]:

@@ -7,34 +7,30 @@ from scipy.optimize import minimize
 # ==================================================================
 file_path = 'EX3/SLAM.TXT'
 try:
-    # Input Format: RobotX, RobotY, WallX, WallY, Marker
     data = np.genfromtxt(file_path, delimiter=',')
-    
-    # Extract Robot Trajectory
+    # Robot Path
     raw_rx, raw_ry = data[:, 0], data[:, 1]
-    
-    # Extract Wall Coordinates
+    # Wall Map
     raw_wx, raw_wy = data[:, 2], data[:, 3]
-    
-    # Extract Markers
+    # Markers
     types = data[:, 4]
     
     is_anchor = (types == 1)
-    is_collision = (types == 2)
-    print(f"Successfully loaded {len(data)} points with 5 columns.")
+    print(f"Loaded {len(data)} points.")
 except Exception as e:
-    print(f"Error loading file: {e}")
+    print(f"Error: {e}")
     exit()
 
 # ==================================================================
-# 2. IDENTIFY LOOP CLOSURES
+# 2. IDENTIFY LOOP CLOSURES (Using Anchors)
 # ==================================================================
 anchors_found_indices = []
 loop_closures = []
 rounds_completed = 0
 
-threshold = 50.0 
-min_index_gap = 100  # Minimum index gap to avoid trivial closures
+# NOTE: Threshold needs to be large enough to catch the drift
+threshold = 150.0 
+min_index_gap = 100 
 
 anchor_indices = np.where(is_anchor)[0]
 
@@ -52,91 +48,95 @@ for i in anchor_indices:
     anchors_found_indices.append(i)
 
 if len(loop_closures) == 0 and len(anchor_indices) >= 2:
-    print("No loops found automatically. Forcing first/last closure...")
+    print("Forcing manual closure (Start <-> End)...")
     loop_closures.append((anchor_indices[-1], anchor_indices[0]))
     rounds_completed = 1
 
-print(f"Detected Rounds: {rounds_completed}")
+print(f"Rounds: {rounds_completed} | Closures: {len(loop_closures)}")
 
 # ==================================================================
-# 3. GLOBAL OPTIMIZATION (Trajectory Only)
+# 3. GLOBAL OPTIMIZATION (CLOSURE ON MAP)
 # ==================================================================
-def slam_objective(flat_poses, rx, ry, closures):
+# Pre-calculate the fixed offset vector from Robot to Wall
+# We assume this relative vector is constant (Rigid Body)
+offset_x = raw_wx - raw_rx
+offset_y = raw_wy - raw_ry
+
+def slam_objective(flat_poses, rx, ry, off_x, off_y, closures):
     poses = flat_poses.reshape(-1, 2)
-    # Odometry Error
+    
+    # 1. Odometry Error (Keep the robot path shape stiff)
     diffs = np.diff(poses, axis=0)
     orig_diffs = np.diff(np.column_stack((rx, ry)), axis=0)
     odom_err = np.sum((diffs - orig_diffs)**2)
     
-    # Loop Closure Error
+    # 2. Map Closure Error (Force WALLS to overlap)
+    # Instead of pulling robot poses together, we pull the calculated wall positions together
     loop_err = 0
     for curr, prev in closures:
-        loop_err += 50000.0 * np.sum((poses[curr] - poses[prev])**2)
+        # Calculate where the wall is for the Current optimized pose
+        curr_wall_x = poses[curr, 0] + off_x[curr]
+        curr_wall_y = poses[curr, 1] + off_y[curr]
+        
+        # Calculate where the wall is for the Previous optimized pose
+        prev_wall_x = poses[prev, 0] + off_x[prev]
+        prev_wall_y = poses[prev, 1] + off_y[prev]
+        
+        # Minimize the distance between the two WALL detections
+        dist_sq = (curr_wall_x - prev_wall_x)**2 + (curr_wall_y - prev_wall_y)**2
+        loop_err += 50000.0 * dist_sq
+        
     return odom_err + loop_err
 
 initial_guess = np.column_stack((raw_rx, raw_ry)).flatten()
-res = minimize(slam_objective, initial_guess, args=(raw_rx, raw_ry, loop_closures), 
+
+# Pass the offsets to the optimizer
+res = minimize(slam_objective, initial_guess, 
+               args=(raw_rx, raw_ry, offset_x, offset_y, loop_closures), 
                method='L-BFGS-B', options={'maxiter': 2000})
 
 opt_rx = res.x.reshape(-1, 2)[:, 0]
 opt_ry = res.x.reshape(-1, 2)[:, 1]
 
-# ==================================================================
-# 4. CORRECT WALL POSITIONS
-# ==================================================================
-# Calculate the relative offset of the wall from the robot in the RAW data
-offset_wx = raw_wx - raw_rx
-offset_wy = raw_wy - raw_ry
-
-# Apply that same offset to the NEW optimized robot path
-opt_wx = opt_rx + offset_wx
-opt_wy = opt_ry + offset_wy
+# Recalculate final wall positions based on optimized path
+opt_wx = opt_rx + offset_x
+opt_wy = opt_ry + offset_y
 
 # ==================================================================
-# 5. FILTER & EXPORT
+# 4. FILTER & EXPORT
 # ==================================================================
 start_idx = min([c[1] for c in loop_closures])
 end_idx = max([c[0] for c in loop_closures])
 
-# --- OPTION A: Save OPTIMIZED (Fixed) Map ---
-# final_rx = opt_rx[start_idx:end_idx+1]
-# final_ry = opt_ry[start_idx:end_idx+1]
-# final_wx = opt_wx[start_idx:end_idx+1]
-# final_wy = opt_wy[start_idx:end_idx+1]
+# --- SWITCHED TO OPTION A (Save the Corrected Result) ---
+final_rx = opt_rx[start_idx:end_idx+1]
+final_ry = opt_ry[start_idx:end_idx+1]
+final_wx = opt_wx[start_idx:end_idx+1]
+final_wy = opt_wy[start_idx:end_idx+1]
 
-# --- OPTION B: Save RAW (Drifted) Map (Truncated) ---
-final_rx = raw_rx[start_idx:end_idx+1]
-final_ry = raw_ry[start_idx:end_idx+1]
-final_wx = raw_wx[start_idx:end_idx+1]
-final_wy = raw_wy[start_idx:end_idx+1]
-
-# Stack and Save
 output_data = np.column_stack((final_rx, final_ry, final_wx, final_wy))
 np.savetxt('EX3/SLAM_CLEANED.TXT', output_data, delimiter=',', fmt='%.2f')
 
-print(f"Exported {len(output_data)} rows. (Type: OPTIMIZED)")
+print(f"Exported {len(output_data)} rows to SLAM_CLEANED.TXT")
 
 # ==================================================================
-# 6. VISUALIZATION
+# 5. VISUALIZATION
 # ==================================================================
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
 
-# Plot 1: Raw Data
-ax1.plot(raw_rx, raw_ry, color='blue', alpha=0.5, label='Robot Path')
-ax1.scatter(raw_wx, raw_wy, color='gray', s=1, alpha=0.3, label='Walls')
-ax1.set_title("1. Raw Data (Drifted)")
-ax1.legend()
+ax1.plot(raw_rx, raw_ry, color='blue', alpha=0.5)
+ax1.scatter(raw_wx, raw_wy, color='gray', s=1, alpha=0.3)
+ax1.set_title("1. Raw Data")
 
-# Plot 2: Loop Closures
 ax2.plot(raw_rx, raw_ry, color='gray', alpha=0.3)
+# Draw lines connecting the WALLS at loop closures to show the new logic
 for c in loop_closures:
-    ax2.plot([raw_rx[c[0]], raw_rx[c[1]]], [raw_ry[c[0]], raw_ry[c[1]]], 'g--', alpha=0.6)
-ax2.set_title(f"2. {len(loop_closures)} Loop Closures")
+    ax2.plot([raw_wx[c[0]], raw_wx[c[1]]], [raw_wy[c[0]], raw_wy[c[1]]], 'r--', alpha=0.8, label='Map Connection')
+ax2.set_title("2. Closures (On Walls)")
 
-# Plot 3: Final Result (Path + Walls)
-ax3.plot(final_rx, final_ry, color='blue', linewidth=2, label='Corrected Path')
-ax3.scatter(final_wx, final_wy, color='black', s=5, alpha=0.6, label='Corrected Walls')
-ax3.set_title("3. Final SLAM Map")
+ax3.plot(final_rx, final_ry, color='blue', linewidth=2, label='Path')
+ax3.scatter(final_wx, final_wy, color='black', s=5, alpha=0.6, label='Walls')
+ax3.set_title("3. Map-Corrected Result")
 ax3.legend()
 
 for ax in [ax1, ax2, ax3]:

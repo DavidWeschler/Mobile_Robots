@@ -6,6 +6,7 @@
 #define RIGHT_MOTOR     OUT_A
 #define LEFT_MOTOR      OUT_B
 #define BOTH_MOTORS     OUT_AB
+#define SENSOR_MOTOR    OUT_C   // NEW: Motor to move the Light Sensor
 #define ULTRASONIC_SENSOR S4
 #define TOUCH_SENSOR    S1
 #define LIGHT_SENSOR    S2
@@ -36,7 +37,7 @@ int   logStatus[MAX_LOG_POINTS]; // 0=None, 1=Line, 2=Wall
 
 int data_index = 0;
 int loop_counter = 0;
-#define LOG_INTERVAL 3     // Log every 3 PID cycles
+#define LOG_INTERVAL 5     // Log every 5 PID cycles
 
 // --- MAPPING DISPLAY ---
 #define DRAW_INTERVAL 1000      // Redraw map every 1000ms
@@ -47,7 +48,7 @@ byte fileHandle;
 // --- TUNING CONSTANTS ---
 const int TARGET_DISTANCE = 32;
 const int DEAD_ZONE = 2;
-const int BASE_SPEED = 50;
+const int BASE_SPEED = 40;
 const int BLACK_THRESHOLD = 30;
 
 // PID Constants
@@ -280,6 +281,15 @@ task main()
             PlaySound(SOUND_DOWN);
             break; // Exit loop and save
         }
+        
+        long currentSensorPos = MotorRotationCount(SENSOR_MOTOR);
+
+        if (abs(currentSensorPos) > 1) {
+            // Fix it! Move exactly back to 0.
+            // Using RotateMotor is accurate.
+            // -currentSensorPos calculates the exact delta needed to return to 0.
+            RotateMotor(SENSOR_MOTOR, 50, -currentSensorPos);
+        }
 
         // 1. DATA GATHERING
         int distance = GetFilteredDistance();
@@ -305,15 +315,22 @@ task main()
 
         // 4. COLLISION RECOVERY (Status = 2)
         if (Sensor(TOUCH_SENSOR) == 1) {
-            Off(LEFT_MOTOR); 
+            Off(LEFT_MOTOR);
             Off(RIGHT_MOTOR);
             Wait(200);
+
+            // ---------------------------------------------------------
+            // NEW LOGIC: RETRACT SENSOR
+            // ---------------------------------------------------------
+            // Moves motor C to pull sensor back.
+            // NOTE: Check if -90 is the correct direction for "pull".
+            RotateMotor(SENSOR_MOTOR, 25, 90);
 
             // Log collision event specifically
             odometry_log(distance, 2);
 
             // Back up exactly 180 degrees
-            RotateMotor(BOTH_MOTORS, BASE_SPEED, -180);
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360);
 
             Wait(200);
             line_status = CheckLineStatus(); // Update line flag just in case
@@ -326,6 +343,12 @@ task main()
             line_status = CheckLineStatus();
             distance = GetFilteredDistance();
             odometry_log(distance, line_status); // Log position after turn
+
+            // ---------------------------------------------------------
+            // NEW LOGIC: RESTORE SENSOR
+            // ---------------------------------------------------------
+            // Moves motor C to push sensor forward.
+            RotateMotor(SENSOR_MOTOR, 25, -90);
 
             // Reset PID memory
             integral = 0;
@@ -380,5 +403,5 @@ task main()
     // End of execution
     WriteLogToFile();
 
-    Wait(10000)
+    Wait(10000);
 }

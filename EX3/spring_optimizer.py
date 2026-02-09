@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 # ==================================================================
 # 1. LOAD DATA (PRESERVE ORIGINAL FORMAT)
 # ==================================================================
-file_path = 'EX3/TRACK_LOG.TXT'
+file_path = r'C:\Users\isrgd\robots\Mobile_Robots\EX3\TRACK_LOG.TXT'
 
 try:
     # Read the file as a raw matrix
@@ -43,7 +43,7 @@ else:
 trimmed_data = data[start_idx:end_idx+1]
 
 # Save exactly what was read, just fewer rows
-np.savetxt('EX3/SLAM_CLEANED.TXT', trimmed_data, delimiter=',', fmt='%.2f')
+np.savetxt('SLAM_CLEANED.TXT', trimmed_data, delimiter=',', fmt='%.2f')
 
 print(f"Saved {len(trimmed_data)} rows to SLAM_CLEANED.TXT")
 

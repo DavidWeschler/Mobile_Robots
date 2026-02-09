@@ -41,15 +41,9 @@ class Config:
     
     # Arena Calibration Settings (Manual Corner Selection)
     # These are the REAL WORLD dimensions of your arena in cm
-    # The user-clicked corners will be mapped to these coordinates
+    # The user-clicked corners will be mapped to these coordinaetes
     ARENA_SCALE: int = 5  # 1 cm = 5 pixels in the 2D map
     # Destination points for homography (arena corners in real-world cm)
-    # Default: 5-corner arena shape (modify to match your arena)
-    # Pt 1: Top-Left (0, 0)
-    # Pt 2: Top-Right (190, 0)
-    # Pt 3: Bottom-Right (190, 237)
-    # Pt 4: Bottom-Inner (89, 237) - where bottom meets diagonal
-    # Pt 5: Left-Inner (0, 148) - where left meets diagonal
     ARENA_DST_POINTS: tuple = ( #זה מוריד 5 נקודות 
         (0, 0),       # Top-Left
         (190, 0),     # Top-Right  

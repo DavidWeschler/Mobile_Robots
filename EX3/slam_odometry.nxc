@@ -1,58 +1,93 @@
 // ==================================================================
-// WALL FOLLOWER + AUTO-SCALING MAP
+// WALL FOLLOWER + MAPPING + ACCURATE SENSOR STABILIZATION
 // ==================================================================
 
 #define RIGHT_MOTOR     OUT_A
 #define LEFT_MOTOR      OUT_B
 #define BOTH_MOTORS     OUT_AB
-
-#define ULTRASONIC_SENSOR S4
+#define SENSOR_MOTOR    OUT_C   // Motor to move the Light Sensor
+#define ULTRASONIC_SENSOR S3
 #define TOUCH_SENSOR    S1
-#define SOUND_SENSOR    S2
+#define LIGHT_SENSOR    S4
+#define SENSOR_SPEED    30
 
-// --- PHYSICAL CONSTANTS ---
+#define FILE_NAME "TRACK_LOG.TXT"
+
+// --- PHYSICAL CONSTANTS (cm) ---
 const float WHEEL_DIAMETER = 5.6;
-const float TRACK_WIDTH    = 11.8;
-
-// --- MAPPING CONFIGURATION ---
-#define MAX_POINTS 1500         // Maximum points to store in memory
-#define DRAW_INTERVAL 1000      // Redraw every 1000ms (1 second)
-#define MIN_SAVE_DIST 2.0       // Only save point if moved 2cm (Reduces lag)
-
-// --- MEMORY ARRAYS (UPDATED FOR 4 COLUMNS) ---
-float pathX[MAX_POINTS];
-float pathY[MAX_POINTS];
-float pathTheta[MAX_POINTS];    // New Column: Angle
-int   pathDist[MAX_POINTS];     // New Column: Distance sensor
-int pointCount = 0;
-long lastDrawTime = 0;
+const float TRACK_WIDTH    = 12.1;
 
 // --- ODOMETRY VARIABLES ---
 float x_cm = 0.0;
 float y_cm = 0.0;
-float theta_rad = 1.57; // Start facing UP (90 deg)
+float theta_rad = 0.0;
+float total_travel_distance = 0.0;
 
 long old_enc_left = 0;
 long old_enc_right = 0;
 
-// --- TUNING ---
-const int TARGET_DISTANCE = 30;
-const int BASE_SPEED = 50;
-const int BLACK_THRESHOLD = 30;
-const int TARGET_LINE_COUNT = 8;
+// --- DATA LOGGING ---
+#define MAX_LOG_POINTS 1800
+float logX[MAX_LOG_POINTS];
+float logY[MAX_LOG_POINTS];
+float logTheta[MAX_LOG_POINTS];
+int   logDistance[MAX_LOG_POINTS];
+int   logStatus[MAX_LOG_POINTS];
 
-// --- PID VARIABLES ---
+int data_index = 0;
+int loop_counter = 0;
+#define LOG_INTERVAL 5
+
+// --- MAPPING DISPLAY ---
+#define DRAW_INTERVAL 1000
+long lastDrawTime = 0;
+
+byte fileHandle;
+
+// --- TUNING CONSTANTS ---
+const int TARGET_DISTANCE = 32;
+const int DEAD_ZONE = 2;
+const int BASE_SPEED = 40;
+const int BLACK_THRESHOLD = 30;
+
+// PID Constants
 const float KP = 1.2;
 const float KI = 0.005;
 const float KD = 15.0;
-const int DEAD_ZONE = 2;
+
 const float INTEGRAL_MAX = 300;
 
-// --- GLOBAL VARIABLES ---
-int lineCount = 0;
+// Filter Globals
 const int N = 3;
 int samples[N];
-byte fileHandle;
+int lineCount = 0;
+bool onLine = false;
+
+// --- STABILIZER CONTROL ---
+// Flag to tell the stabilizer task when to pause (during collision)
+bool stabilizer_active = true;
+
+// ------------------------------------------------------------------
+// NEW TASK: Sensor Stabilizer
+// Runs in parallel to keep the sensor at 0 using accurate RotateMotor
+// ------------------------------------------------------------------
+task SensorStabilizer() {
+    while(true) {
+        // Only stabilize if the main task hasn't paused us
+        if (stabilizer_active) {
+            long currentCount = MotorRotationCount(SENSOR_MOTOR);
+
+            // If drifted more than 1 degree, fix it accurately
+            if (abs(currentCount) > 4) {
+                // RotateMotor is precise and holds position
+                // We move by -currentCount to get back to 0
+                RotateMotor(SENSOR_MOTOR, SENSOR_SPEED, -currentCount);
+            }
+        }
+        // Check 10 times a second (saves CPU for main task)
+        Wait(100);
+    }
+}
 
 // ------------------------------------------------------------------
 // FUNCTION: Filter Sensor Noise
@@ -60,77 +95,138 @@ byte fileHandle;
 int GetFilteredDistance() {
     int raw = SensorUS(ULTRASONIC_SENSOR);
     if (raw > 255) raw = 255;
-    for (int i = N - 1; i > 0; i--) samples[i] = samples[i - 1];
+
+    for (int i = N - 1; i > 0; i--) {
+        samples[i] = samples[i - 1];
+    }
     samples[0] = raw;
+
     int sum = 0;
-    for (int i = 0; i < N; i++) sum += samples[i];
+    for (int i = 0; i < N; i++) {
+        sum += samples[i];
+    }
+
     return sum / N;
 }
 
 // ------------------------------------------------------------------
-// FUNCTION: Redraw Map (Auto-Scaling)
+// FUNCTION: Check Light Sensor
+// ------------------------------------------------------------------
+int CheckLineStatus() {
+    int current_status = 0;
+    
+    if (Sensor(LIGHT_SENSOR) < BLACK_THRESHOLD) {
+        if (onLine == false) {
+            lineCount++;
+            onLine = true;
+        }
+        current_status = 1;
+        PlaySound(SOUND_UP);
+    } else {
+        if (Sensor(LIGHT_SENSOR) > BLACK_THRESHOLD + 5) {
+            onLine = false;
+        }
+        current_status = 0;
+    }
+    return current_status;
+}
+
+// ------------------------------------------------------------------
+// FUNCTION: Redraw Map on Screen
 // ------------------------------------------------------------------
 void RedrawMap() {
-    if (pointCount < 2) return;
+    if (data_index < 2) return;
 
-    // 1. Find Min/Max to auto-fit the screen
-    float min_x = pathX[0]; float max_x = pathX[0];
-    float min_y = pathY[0]; float max_y = pathY[0];
+    float min_x = logX[0]; float max_x = logX[0];
+    float min_y = logY[0]; float max_y = logY[0];
 
-    for(int i=1; i < pointCount; i++) {
-        if (pathX[i] < min_x) min_x = pathX[i];
-        if (pathX[i] > max_x) max_x = pathX[i];
-        if (pathY[i] < min_y) min_y = pathY[i];
-        if (pathY[i] > max_y) max_y = pathY[i];
+    for(int i=1; i < data_index; i++) {
+        if (logX[i] < min_x) min_x = logX[i];
+        if (logX[i] > max_x) max_x = logX[i];
+        if (logY[i] < min_y) min_y = logY[i];
+        if (logY[i] > max_y) max_y = logY[i];
     }
 
-    // 2. Calculate Range
     float range_x = max_x - min_x;
     float range_y = max_y - min_y;
 
-    // Prevent divide by zero if robot hasn't moved
     if (range_x < 1.0) range_x = 1.0;
     if (range_y < 1.0) range_y = 1.0;
 
-    // 3. Calculate Scale Factors (Screen is 100x64)
-    // We leave a 2-pixel margin
     float scale_x = 96.0 / range_x;
     float scale_y = 60.0 / range_y;
 
-    // Pick the smaller scale to maintain aspect ratio (don't stretch the map)
     float scale = scale_x;
     if (scale_y < scale_x) scale = scale_y;
 
-    // 4. Draw
     ClearScreen();
-    
-    // Draw Start Point (Circle)
-    int sx = (pathX[0] - min_x) * scale + 2;
-    int sy = (pathY[0] - min_y) * scale + 2;
+
+    int sx = (logX[0] - min_x) * scale + 2;
+    int sy = (logY[0] - min_y) * scale + 2;
     CircleOut(sx, sy, 2);
 
-    // Draw all segments
-    for(int i=0; i < pointCount-1; i++) {
-        int x1 = (pathX[i]   - min_x) * scale + 2;
-        int y1 = (pathY[i]   - min_y) * scale + 2;
-        int x2 = (pathX[i+1] - min_x) * scale + 2;
-        int y2 = (pathY[i+1] - min_y) * scale + 2;
-        
+    for(int i=0; i < data_index-1; i++) {
+        int x1 = (logX[i]   - min_x) * scale + 2;
+        int y1 = (logY[i]   - min_y) * scale + 2;
+        int x2 = (logX[i+1] - min_x) * scale + 2;
+        int y2 = (logY[i+1] - min_y) * scale + 2;
+
         LineOut(x1, y1, x2, y2);
     }
-    
-    // Draw Current Position (X)
-    int ex = (pathX[pointCount-1] - min_x) * scale + 2;
-    int ey = (pathY[pointCount-1] - min_y) * scale + 2;
+
+    int ex = (logX[data_index-1] - min_x) * scale + 2;
+    int ey = (logY[data_index-1] - min_y) * scale + 2;
     LineOut(ex-2, ey-2, ex+2, ey+2);
     LineOut(ex-2, ey+2, ex+2, ey-2);
 }
 
 // ------------------------------------------------------------------
-// FUNCTION: Calculate Position & Update Array
-// ADDED ARGUMENT: current_dist (to save to array)
+// FUNCTION: Save File
 // ------------------------------------------------------------------
-void UpdateOdometry(int current_dist) {
+void WriteLogToFile()
+{
+    DeleteFile(FILE_NAME);
+    if (CreateFile(FILE_NAME, 20000, fileHandle) == LDR_SUCCESS)
+    {
+        TextOut(0, LCD_LINE1, "SAVING...");
+
+        for (int i = 0; i < data_index; i++)
+        {
+            long xo = logX[i] * 10000;
+            long yo = logY[i] * 10000;
+            long to = logTheta[i] * 100000;
+
+            string s = NumToStr(xo);
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(yo));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(to));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(logDistance[i]));
+            s = StrCat(s, ",");
+            s = StrCat(s, NumToStr(logStatus[i]));
+            s = StrCat(s, "\n");
+
+            unsigned int bw = 0;
+            WriteString(fileHandle, s, bw);
+        }
+
+        CloseFile(fileHandle);
+        PlaySound(SOUND_UP);
+        TextOut(0, LCD_LINE3, "DONE!");
+        Wait(2000);
+    }
+    else {
+        TextOut(0, LCD_LINE1, "SAVE ERROR");
+        PlaySound(SOUND_LOW_BEEP);
+        Wait(2000);
+    }
+}
+
+// ------------------------------------------------------------------
+// FUNCTION: Odometry Log
+// ------------------------------------------------------------------
+void odometry_log(int distance, int status){
     long curr_enc_left  = MotorRotationCount(LEFT_MOTOR);
     long curr_enc_right = MotorRotationCount(RIGHT_MOTOR);
 
@@ -140,11 +236,13 @@ void UpdateOdometry(int current_dist) {
     old_enc_left  = curr_enc_left;
     old_enc_right = curr_enc_right;
 
-    float dist_per_tick = (PI * WHEEL_DIAMETER) / 360.0;
-    float d_left  = d_ticks_left  * dist_per_tick;
-    float d_right = d_ticks_right * dist_per_tick;
+    float d_left  = d_ticks_left  * (PI * WHEEL_DIAMETER / 360.0);
+    float d_right = d_ticks_right * (PI * WHEEL_DIAMETER / 360.0);
 
     float d_center = (d_left + d_right) / 2.0;
+
+    total_travel_distance += abs(d_center);
+
     float d_theta  = (d_right - d_left) / TRACK_WIDTH;
 
     float avg_theta = theta_rad + (d_theta / 2.0);
@@ -153,31 +251,14 @@ void UpdateOdometry(int current_dist) {
     y_cm += d_center * sin(avg_theta);
     theta_rad += d_theta;
 
-    // --- SAVE POINT LOGIC ---
-    if (pointCount < MAX_POINTS) {
-        
-        // If it's the first point, always save
-        if (pointCount == 0) {
-            pathX[0] = x_cm;
-            pathY[0] = y_cm;
-            pathTheta[0] = theta_rad;    // Save Theta
-            pathDist[0] = current_dist;  // Save Distance
-            pointCount++;
-        } 
-        else {
-            // Check distance from last saved point
-            float dx = x_cm - pathX[pointCount-1];
-            float dy = y_cm - pathY[pointCount-1];
-            float dist = sqrt(dx*dx + dy*dy);
-            
-            if (dist >= MIN_SAVE_DIST) {
-                pathX[pointCount] = x_cm;
-                pathY[pointCount] = y_cm;
-                pathTheta[pointCount] = theta_rad;   // Save Theta
-                pathDist[pointCount] = current_dist; // Save Distance
-                pointCount++;
-            }
-        }
+    if (data_index < MAX_LOG_POINTS)
+    {
+        logX[data_index]     = x_cm;
+        logY[data_index]     = y_cm;
+        logTheta[data_index] = theta_rad;
+        logDistance[data_index] = distance;
+        logStatus[data_index] = status;
+        data_index++;
     }
 }
 
@@ -186,73 +267,121 @@ void UpdateOdometry(int current_dist) {
 // ------------------------------------------------------------------
 task main()
 {
-    // Setup
     SetSensorLowspeed(ULTRASONIC_SENSOR);
     SetSensorTouch(TOUCH_SENSOR);
-    SetSensorSound(SOUND_SENSOR);
+    SetSensorLight(LIGHT_SENSOR, true);
+
+    // Initialize filter
+    int initialDist = SensorUS(ULTRASONIC_SENSOR);
+    for (int i = 0; i < N; i++) {
+        if (initialDist > 255) initialDist = 255;
+        samples[i] = initialDist;
+    }
 
     ResetTachoCount(LEFT_MOTOR);
     ResetTachoCount(RIGHT_MOTOR);
 
-    // Init Filter
-    int initialDist = SensorUS(ULTRASONIC_SENSOR);
-    for (int i = 0; i < N; i++) samples[i] = initialDist;
+    // SETUP SENSOR MOTOR
+    ResetTachoCount(SENSOR_MOTOR); // Assume current position is 0 (Forward)
+    stabilizer_active = true;
+    StartTask(SensorStabilizer);   // START THE PARALLEL TASK
 
-    // Variables
+    old_enc_left = 0;
+    old_enc_right = 0;
+
     float integral = 0;
     int lastError = 0;
     lastDrawTime = CurrentTick();
 
     // ----------------- MAIN LOOP -----------------
-    while (Sensor(SOUND_SENSOR) < 99) {
+    while (true) {
 
-        // Get Distance FIRST so we can log it in Odometry
+        // 0. EXIT CONDITION
+        if (total_travel_distance >= 1100.0) {
+            stabilizer_active = false; // Stop the helper task
+            Off(OUT_AB);
+            PlaySound(SOUND_DOWN);
+            break;
+        }
+
+        // 1. DATA GATHERING
         int distance = GetFilteredDistance();
+        int line_status = CheckLineStatus();
 
-        // A. ODOMETRY (Pass distance to log it)
-        UpdateOdometry(distance);
-        
-        // B. MAP REFRESH TIMER (Every 1 Second)
+        loop_counter++;
+
+        // 2. LOGGING
+        if (loop_counter >= LOG_INTERVAL || line_status == 1)
+        {
+            odometry_log(distance, line_status);
+            loop_counter = 0;
+        }
+
+        // 3. MAP REDRAW
         if (CurrentTick() - lastDrawTime > DRAW_INTERVAL) {
             RedrawMap();
             lastDrawTime = CurrentTick();
         }
 
-        // D. COLLISION RECOVERY
+        // 4. COLLISION RECOVERY
         if (Sensor(TOUCH_SENSOR) == 1) {
-            Off(BOTH_MOTORS);
-            PlaySound(SOUND_LOW_BEEP);
+            Off(LEFT_MOTOR);
+            Off(RIGHT_MOTOR);
+
+            // --- PAUSE STABILIZER ---
+            stabilizer_active = false;
+            Wait(100); // Give the stabilizer task a moment to finish any active move
+
+            odometry_log(distance, 2);
+            
+            // RETRACT SENSOR (Accurate Move)
+            // Using RotateMotor here is safe because main loop is waiting anyway
+            RotateMotor(SENSOR_MOTOR, SENSOR_SPEED, 90);
+
+            // Back up
+            RotateMotor(BOTH_MOTORS, BASE_SPEED, -360);
+
             Wait(200);
 
-            RotateMotor(BOTH_MOTORS, BASE_SPEED, -240);
+            // Turn Right
             RotateMotor(RIGHT_MOTOR, BASE_SPEED, -360);
 
-            // Update odometry with new distance after recovery
-            // (Re-read sensor for accuracy)
-            int recoveryDist = GetFilteredDistance();
-            UpdateOdometry(recoveryDist);
+            // RESTORE SENSOR (Accurate Move)
+            // Move back to 0 (Forward)
+            // Since we are at -90, moving +90 brings us to 0.
+            RotateMotor(SENSOR_MOTOR, SENSOR_SPEED, -90);
+
+            distance = GetFilteredDistance();
+            odometry_log(distance, 0);
+
+            // --- RESUME STABILIZER ---
+            stabilizer_active = true;
 
             integral = 0;
             lastError = 0;
-            
-            // Refill filter
+
             int current = SensorUS(ULTRASONIC_SENSOR);
-            for (int i=0; i<N; i++) samples[i] = current;
+            for (int i = 0; i < N; i++) {
+                samples[i] = current;
+            }
 
             continue;
         }
 
-        // E. PID CONTROL
+        // --- PID CONTROL ---
+
         int error = distance - TARGET_DISTANCE;
+
         if (abs(error) < DEAD_ZONE) error = 0;
 
-        if (abs(error) < 10) integral += error;
+        if (abs(error) < 15) integral += error;
         else integral = 0;
 
         if (integral > INTEGRAL_MAX) integral = INTEGRAL_MAX;
         if (integral < -INTEGRAL_MAX) integral = -INTEGRAL_MAX;
 
         int derivative = error - lastError;
+
         float turnRatio = (KP * error) + (KI * integral) + (KD * derivative);
 
         int leftSpeed  = BASE_SPEED - turnRatio;
@@ -267,41 +396,10 @@ task main()
         OnFwd(RIGHT_MOTOR, rightSpeed);
 
         lastError = error;
+
         Wait(40);
     }
-    Off(BOTH_MOTORS);
 
-    // --------------------------------------------------------------
-    // SAVE FILE WITH 4 COLUMNS
-    // --------------------------------------------------------------
-    TextOut(0, LCD_LINE8, "SAVING...");
-    string filename = "SLAM_PATH.TXT";
-    unsigned int bw = 0;
-    DeleteFile(filename);
-    
-    if (CreateFile(filename, 15000, fileHandle) == LDR_SUCCESS){
-        
-        for (int i = 0; i < pointCount; i++) {
-            // Convert to large integers (matching friend's code logic)
-            long xo = pathX[i] * 10000;
-            long yo = pathY[i] * 10000;
-            long to = pathTheta[i] * 100000;
-            int dist = pathDist[i];
-
-            // Build string: X, Y, Theta, Distance
-            string s = NumToStr(xo);
-            s = StrCat(s, ",");
-            s = StrCat(s, NumToStr(yo));
-            s = StrCat(s, ",");
-            s = StrCat(s, NumToStr(to));
-            s = StrCat(s, ",");
-            s = StrCat(s, NumToStr(dist));
-            s = StrCat(s, "\n");
-
-            WriteString(fileHandle, s, bw);
-        }
-    }
-    CloseFile(fileHandle);
-    TextOut(0, LCD_LINE8, "SAVED!");
-    Wait(5000);
+    WriteLogToFile();
+    Wait(10000);
 }

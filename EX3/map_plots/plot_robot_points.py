@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- Configuration ---
-FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\TRACK_LOG.TXT"
+FILE_NAME = r"C:\CS\Robots_mobile\Mobile_Robots\EX3\SLAM_CLEANED.TXT"
 
 def main():
     print(f"Loading data from: {FILE_NAME}")

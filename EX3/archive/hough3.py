@@ -4,131 +4,187 @@ import math
 import random
 
 # --- Configuration ---
-# FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\SLAM_CLEANED.TXT"
-FILE_NAME = "C:\\CS\\Robots_mobile\\Mobile_Robots\\EX3\\RAW_LAP_ONLY.TXT"
+FILE_NAME = r"C:\CS\Robots_mobile\Mobile_Robots\EX3\SLAM_CLEANED.TXT"
 
-# --- TUNED PARAMETERS FOR RANSAC ---
-RANSAC_ITERATIONS = 100      # Number of RANSAC iterations per wall
-RANSAC_THRESHOLD = 8.0       # Distance threshold for inliers (cm)
-RANSAC_MIN_INLIERS = 6       # Minimum points to form a wall
-MIN_POINTS_REMAINING = 6     # Stop when fewer points remain
+# Based on your raw data magnitude
+X_Y_SCALE = 10000.0
+THETA_SCALE = 100000.0
+SENSOR_ANGLE_OFFSET = (math.pi / 2.0) 
+
+# --- TUNED PARAMETERS FOR YOUR DATA ---
+HOUGH_RHO_RES = 1.0      # 2cm grid for distance
+HOUGH_THETA_RES = 3.0    # 3-degree grid (allows for some robot wobble)
+HOUGH_THRESHOLD = 6      # NEEDED: Low threshold because you have few points per wall
+WALL_THICKNESS = 10.0    # NEEDED: High tolerance to handle the large drift
+
+# Spring Optimization
+SLAM_ITERATIONS = 80     # More iterations to fix the heavy drift
+SLAM_LEARNING_RATE = 0.05
+SLAM_DIST_THRESH = 40.0  # Aggressive loop closure (snap points within 40cm)
 
 # Fix randomness
 random.seed(42)
 np.random.seed(42)
 
 # ==============================================================================
-# 1. RANSAC LINE DETECTION
+# 1. SPRING METHOD (GRAPH SLAM) 
+# ==============================================================================
+class GraphSLAM:
+    def __init__(self):
+        self.nodes = []       
+        self.landmarks = []   
+        self.constraints = [] 
+
+    def add_node(self, x, y, theta):
+        fixed = (len(self.nodes) == 0)
+        self.nodes.append({'x': x, 'y': y, 'theta': theta, 'fixed': fixed})
+        if len(self.nodes) > 1:
+            prev = self.nodes[-2]
+            self.constraints.append({
+                'type': 'odo', 'i': len(self.nodes)-2, 'j': len(self.nodes)-1,
+                'dx': x - prev['x'], 'dy': y - prev['y']
+            })
+
+    def add_measurement(self, node_idx, dist):
+        robot = self.nodes[node_idx]
+        angle = robot['theta'] + SENSOR_ANGLE_OFFSET
+        lx = robot['x'] + dist * math.cos(angle)
+        ly = robot['y'] + dist * math.sin(angle)
+
+        best_idx = -1
+        min_dist = SLAM_DIST_THRESH # Use tuned threshold
+        for i, lm in enumerate(self.landmarks):
+            d = math.sqrt((lx - lm['x'])**2 + (ly - lm['y'])**2)
+            if d < min_dist:
+                min_dist = d
+                best_idx = i
+        
+        if best_idx != -1:
+            lm = self.landmarks[best_idx]
+            lm['x'] = (lm['x']*lm['n'] + lx)/(lm['n']+1)
+            lm['y'] = (lm['y']*lm['n'] + ly)/(lm['n']+1)
+            lm['n'] += 1
+        else:
+            self.landmarks.append({'x': lx, 'y': ly, 'n': 1})
+            best_idx = len(self.landmarks) - 1
+
+        self.constraints.append({
+            'type': 'meas', 'node_idx': node_idx, 'land_idx': best_idx,
+            'dist': dist, 'angle_offset': SENSOR_ANGLE_OFFSET
+        })
+
+    def relax_springs(self):
+        print(f"  > Relaxing Springs ({SLAM_ITERATIONS} iterations)...")
+        for _ in range(SLAM_ITERATIONS):
+            n_force = {i: [0.0, 0.0, 0] for i in range(len(self.nodes))}
+            l_force = {i: [0.0, 0.0, 0] for i in range(len(self.landmarks))}
+
+            for c in self.constraints:
+                if c['type'] == 'odo':
+                    n1, n2 = self.nodes[c['i']], self.nodes[c['j']]
+                    ex = (n1['x'] + c['dx']) - n2['x']
+                    ey = (n1['y'] + c['dy']) - n2['y']
+                    if not n1['fixed']:
+                        n_force[c['i']][0] += ex; n_force[c['i']][1] += ey; n_force[c['i']][2] += 1
+                    if not n2['fixed']:
+                        n_force[c['j']][0] -= ex; n_force[c['j']][1] -= ey; n_force[c['j']][2] += 1
+                elif c['type'] == 'meas':
+                    r = self.nodes[c['node_idx']]
+                    l = self.landmarks[c['land_idx']]
+                    a = r['theta'] + c['angle_offset']
+                    px = r['x'] + c['dist']*math.cos(a)
+                    py = r['y'] + c['dist']*math.sin(a)
+                    ex = px - l['x']
+                    ey = py - l['y']
+                    if not r['fixed']:
+                        n_force[c['node_idx']][0] -= ex; n_force[c['node_idx']][1] -= ey; n_force[c['node_idx']][2] += 1
+                    l_force[c['land_idx']][0] += ex; l_force[c['land_idx']][1] += ey; l_force[c['land_idx']][2] += 1
+
+            for i, f in n_force.items():
+                if f[2]>0: self.nodes[i]['x'] += (f[0]/f[2])*SLAM_LEARNING_RATE; self.nodes[i]['y'] += (f[1]/f[2])*SLAM_LEARNING_RATE
+            for i, f in l_force.items():
+                if f[2]>0: self.landmarks[i]['x'] += (f[0]/f[2])*SLAM_LEARNING_RATE; self.landmarks[i]['y'] += (f[1]/f[2])*SLAM_LEARNING_RATE
+
+# ==============================================================================
+# 2. HOUGH TRANSFORM LOGIC
 # ==============================================================================
 
 def fit_line_least_squares(x_pts, y_pts):
     if len(x_pts) < 2: return 0, 0
     x = np.array(x_pts)
     y = np.array(y_pts)
-    if np.std(y) > np.std(x) * 3:  # Vertical line
+    if np.std(y) > np.std(x) * 3: # Vertical
         return float('inf'), np.mean(x)
     A = np.vstack([x, np.ones(len(x))]).T
     m, c = np.linalg.lstsq(A, y, rcond=None)[0]
     return m, c
 
-def point_to_line_distance(x, y, m, c):
-    """Calculate perpendicular distance from point to line y = mx + c"""
-    if m == float('inf'):
-        return abs(x - c)
-    # Line: mx - y + c = 0, distance = |mx - y + c| / sqrt(m^2 + 1)
-    return abs(m * x - y + c) / math.sqrt(m**2 + 1)
-
-def ransac_fit_line(x_pts, y_pts):
-    """
-    RANSAC to fit a single line to points.
-    Returns (m, c, inlier_indices) or None if no good line found.
-    """
-    n_points = len(x_pts)
-    if n_points < 2:
-        return None
-    
-    best_inliers = []
-    best_m, best_c = 0, 0
-    
-    for _ in range(RANSAC_ITERATIONS):
-        # 1. Randomly select 2 points
-        idx1, idx2 = random.sample(range(n_points), 2)
-        x1, y1 = x_pts[idx1], y_pts[idx1]
-        x2, y2 = x_pts[idx2], y_pts[idx2]
-        
-        # 2. Fit line through these 2 points
-        if abs(x2 - x1) < 1e-6:  # Vertical line
-            m = float('inf')
-            c = (x1 + x2) / 2
-        else:
-            m = (y2 - y1) / (x2 - x1)
-            c = y1 - m * x1
-        
-        # 3. Count inliers
-        inliers = []
-        for i in range(n_points):
-            dist = point_to_line_distance(x_pts[i], y_pts[i], m, c)
-            if dist < RANSAC_THRESHOLD:
-                inliers.append(i)
-        
-        # 4. Keep best
-        if len(inliers) > len(best_inliers):
-            best_inliers = inliers
-            best_m, best_c = m, c
-    
-    if len(best_inliers) < RANSAC_MIN_INLIERS:
-        return None
-    
-    # 5. Refit line using all inliers
-    inlier_x = [x_pts[i] for i in best_inliers]
-    inlier_y = [y_pts[i] for i in best_inliers]
-    final_m, final_c = fit_line_least_squares(inlier_x, inlier_y)
-    
-    return final_m, final_c, best_inliers
-
-def extract_walls_ransac(x_all, y_all):
-    """
-    Extract multiple walls using iterative RANSAC.
-    """
+def extract_walls_hough(x_all, y_all):
     remaining_idx = list(range(len(x_all)))
     found_walls = []
     
-    print(f"  > Running RANSAC on {len(x_all)} points...")
-    
-    while len(remaining_idx) >= MIN_POINTS_REMAINING:
-        # Get current remaining points
-        curr_x = [x_all[i] for i in remaining_idx]
-        curr_y = [y_all[i] for i in remaining_idx]
+    # Pre-calculate Theta values (-90 to 90 degrees)
+    thetas = np.deg2rad(np.arange(-90, 90, HOUGH_THETA_RES))
+    cos_t = np.cos(thetas)
+    sin_t = np.sin(thetas)
+
+    print(f"  > Running Hough Transform on {len(x_all)} points...")
+    if len(x_all) < HOUGH_THRESHOLD:
+        print(f"    [!] Not enough points (Need {HOUGH_THRESHOLD}, got {len(x_all)})")
+        return []
+
+    while len(remaining_idx) > HOUGH_THRESHOLD:
         
-        # Try to fit a line
-        result = ransac_fit_line(curr_x, curr_y)
+        # 1. Vote
+        accumulator = {} 
+        curr_x = np.array([x_all[i] for i in remaining_idx])
+        curr_y = np.array([y_all[i] for i in remaining_idx])
         
-        if result is None:
+        for i in range(len(curr_x)):
+            rhos = curr_x[i] * cos_t + curr_y[i] * sin_t
+            rhos_idx = np.round(rhos / HOUGH_RHO_RES).astype(int)
+            for t_idx, r_idx in enumerate(rhos_idx):
+                key = (r_idx, t_idx)
+                accumulator[key] = accumulator.get(key, 0) + 1
+
+        # 2. Peak
+        if not accumulator: break
+        best_line = max(accumulator, key=accumulator.get)
+        votes = accumulator[best_line]
+        
+        if votes < HOUGH_THRESHOLD: 
             break
+            
+        r_idx, t_idx = best_line
+        best_rho = r_idx * HOUGH_RHO_RES
         
-        m, c, local_inliers = result
+        # 3. Inliers
+        dist_errors = np.abs(curr_x * cos_t[t_idx] + curr_y * sin_t[t_idx] - best_rho)
+        local_inliers = np.where(dist_errors < WALL_THICKNESS)[0]
         
-        # Convert local indices to global indices
+        if len(local_inliers) < HOUGH_THRESHOLD: 
+            remaining_idx.pop(0) 
+            continue
+
         real_indices = [remaining_idx[k] for k in local_inliers]
         
-        # Store wall data
+        # 4. Refine & Save
         wall_x = [x_all[i] for i in real_indices]
         wall_y = [y_all[i] for i in real_indices]
+        m_final, c_final = fit_line_least_squares(wall_x, wall_y)
         
         found_walls.append({
-            'm': m, 'c': c,
+            'm': m_final, 'c': c_final,
             'x_points': wall_x, 'y_points': wall_y, 'indices': real_indices
         })
         
         print(f"    -> Found Wall with {len(real_indices)} points.")
-        
-        # Remove inliers from remaining points
         remaining_idx = [idx for idx in remaining_idx if idx not in real_indices]
-    
+
     return found_walls
 
 # ==============================================================================
-# 2. HELPERS
+# 3. HELPERS
 # ==============================================================================
 
 def rotate_points(x_arr, y_arr, angle_rad):
@@ -152,13 +208,15 @@ def find_intersection(m1, c1, m2, c2):
     y = m1 * x + c1
     return x, y
 
-def calculate_and_save_center(corners_x, corners_y, sorted_walls):
+def calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start_y):
     final_corners = []
     if corners_x:
         unique_x = corners_x[:-1] 
         unique_y = corners_y[:-1]
         for cx, cy in zip(unique_x, unique_y):
-            final_corners.append((cx, cy))
+            dx = cx - start_x
+            dy = cy - start_y
+            final_corners.append((-dx, -dy))
     
     try:
         with open("CENTER.TXT", "w") as f:
@@ -171,16 +229,14 @@ def calculate_and_save_center(corners_x, corners_y, sorted_walls):
         print(f"Failed to write CENTER.TXT: {e}")
 
 # ==============================================================================
-# 3. INTERACTIVE VISUALIZER
+# 4. INTERACTIVE VISUALIZER
 # ==============================================================================
 
 class InteractiveMapVisualizer:
-    def __init__(self, sorted_walls, corners_x, corners_y, raw_x, raw_y):
+    def __init__(self, sorted_walls, corners_x, corners_y):
         self.walls = sorted_walls
         self.corners_x = corners_x
         self.corners_y = corners_y
-        self.raw_x = raw_x
-        self.raw_y = raw_y
         
         # State for transformations
         self.mirror_factor = 1  # 1 for normal, -1 for mirrored
@@ -217,7 +273,7 @@ class InteractiveMapVisualizer:
 
     def plot_ideal(self):
         self.ax1.set_title("Ideal Arena", fontsize=14)
-        ARENA_PTS = [(-41.5, -30), (-130.5, 59), (-130.5, 207), (59.5, 207), (59.5, -30)]
+        ARENA_PTS = [(-41.5, -30), (-130.5, 59), (-130.5, 207), (59.5, 207), (59.5, -30) ]
         real_x = [p[0] for p in ARENA_PTS]
         real_y = [p[1] for p in ARENA_PTS]
         
@@ -241,7 +297,7 @@ class InteractiveMapVisualizer:
 
     def update_map_plot(self):
         self.ax2.clear()
-        self.ax2.set_title("Generated Map - RANSAC (Controls: 'r' to rotate, 'm' to mirror)", fontsize=14)
+        self.ax2.set_title("Generated Map (Controls: 'r' to rotate, 'm' to mirror)", fontsize=14)
         
         colors = plt.cm.rainbow(np.linspace(0, 1, len(self.walls)))
 
@@ -284,27 +340,48 @@ class InteractiveMapVisualizer:
         self.fig.canvas.draw()
 
 # ==============================================================================
-# 4. MAIN PIPELINE
+# 5. MAIN PIPELINE
 # ==============================================================================
 
-def process_map_data(x_wall, y_wall):
+def process_map_data(x_robot, y_robot, theta_robot, distance_measured):
     
-    print(f"1. Total points for wall detection: {len(x_wall)}")
+    print("1. Running Spring Optimization...")
+    slam = GraphSLAM()
+    for i in range(len(x_robot)):
+        slam.add_node(x_robot[i], y_robot[i], theta_robot[i])
+        if distance_measured[i] < 200: 
+            slam.add_measurement(i, distance_measured[i])
+    slam.relax_springs()
+    
+    x_robot_corr = [n['x'] for n in slam.nodes]
+    y_robot_corr = [n['y'] for n in slam.nodes]
+    
+    print("2. Generating Wall Points...")
+    x_wall = []
+    y_wall = []
+    for i in range(len(x_robot_corr)):
+        if distance_measured[i] >= 200: continue
+        sensor_heading = theta_robot[i] + SENSOR_ANGLE_OFFSET
+        wx = x_robot_corr[i] + distance_measured[i] * math.cos(sensor_heading)
+        wy = y_robot_corr[i] + distance_measured[i] * math.sin(sensor_heading)
+        x_wall.append(wx)
+        y_wall.append(wy)
 
-    print("2. Extracting Walls (RANSAC)...")
-    walls = extract_walls_ransac(x_wall, y_wall)
+    print(f"   [INFO] Total valid points for detection: {len(x_wall)}")
+
+    print("3. Extracting Walls (Hough Transform)...")
+    walls = extract_walls_hough(x_wall, y_wall)
     
     if not walls:
         print("NO WALLS FOUND! Plotting raw points for debug...")
         plt.figure()
         plt.scatter(x_wall, y_wall, s=5)
+        plt.plot(x_robot_corr, y_robot_corr, 'r:', alpha=0.3)
         plt.title("Debug: Raw Wall Points (No Lines Detected)")
-        plt.axis('equal')
-        plt.grid(True)
         plt.show()
         return
 
-    # 3. Sort Walls Geometrically
+    # 4. Sort Walls Geometrically
     all_wall_x = []
     all_wall_y = []
     for w in walls:
@@ -321,7 +398,9 @@ def process_map_data(x_wall, y_wall):
     
     sorted_walls = sorted(walls, key=lambda x: x['angle_to_center'])
     
-    # 4. Alignment - align the first wall to be horizontal/vertical
+    # 5. Alignment
+    start_x = x_robot_corr[0]
+    start_y = y_robot_corr[0]
     anchor_wall = None
     min_index_found = float('inf')
     
@@ -334,12 +413,13 @@ def process_map_data(x_wall, y_wall):
             
     if anchor_wall:
         m_anchor = anchor_wall['m']
-        if m_anchor == float('inf'): 
-            current_angle = math.pi / 2
-        else: 
-            current_angle = math.atan(m_anchor)
+        if m_anchor == float('inf'): current_angle = math.pi / 2
+        else: current_angle = math.atan(m_anchor)
         
         rotation_angle = -current_angle
+        
+        sx, sy = rotate_points([start_x], [start_y], rotation_angle)
+        start_x, start_y = sx[0], sy[0]
         
         all_y_temp = []
         for w in sorted_walls:
@@ -353,6 +433,8 @@ def process_map_data(x_wall, y_wall):
         
         if map_centroid_y < anchor_centroid_y:
             rotation_fix = math.pi
+            sx, sy = rotate_points([start_x], [start_y], rotation_fix)
+            start_x, start_y = sx[0], sy[0]
             for w in sorted_walls:
                 rx, ry = rotate_points(w['x_points'], w['y_points'], rotation_fix)
                 w['x_points'] = rx
@@ -363,7 +445,7 @@ def process_map_data(x_wall, y_wall):
             w['m'] = nm
             w['c'] = nc
 
-    # --- CALCULATE CORNERS ---
+    # --- CALCULATE CORNERS (Before Visualization) ---
     corners_x = []
     corners_y = []
     
@@ -385,30 +467,23 @@ def process_map_data(x_wall, y_wall):
             corners_x.append(corners_x[0])
             corners_y.append(corners_y[0])
 
-    # Save center file
-    calculate_and_save_center(corners_x, corners_y, sorted_walls)
+    # Save original aligned center (as requested, do not change logic)
+    calculate_and_save_center(corners_x, corners_y, sorted_walls, start_x, start_y)
     
     # --- INTERACTIVE PLOTTING ---
-    InteractiveMapVisualizer(sorted_walls, corners_x, corners_y, x_wall, y_wall)
+    InteractiveMapVisualizer(sorted_walls, corners_x, corners_y)
 
 # --- Load Data ---
 def load_and_process_data():
     try:
-        print(f"Loading data from: {FILE_NAME}")
         data = np.loadtxt(FILE_NAME, delimiter=',')
-        
-        # New format: 3 columns (x, y, t) - ignore t column
-        x_wall = data[:, 0]  # X coordinates (already wall points)
-        y_wall = data[:, 1]  # Y coordinates (already wall points)
-        # data[:, 2] is 't' column - ignored as requested
-        
-        print(f"Loaded {len(x_wall)} wall points")
-        
-        process_map_data(list(x_wall), list(y_wall))
+        x_robot = data[:, 0] / X_Y_SCALE
+        y_robot = data[:, 1] / X_Y_SCALE
+        theta_robot = data[:, 2] / THETA_SCALE
+        distance_measured = data[:, 3]
+        process_map_data(x_robot, y_robot, theta_robot, distance_measured)
     except Exception as e:
         print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 if __name__ == "__main__":
     load_and_process_data()

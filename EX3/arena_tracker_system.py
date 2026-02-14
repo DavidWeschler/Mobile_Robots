@@ -48,9 +48,9 @@ class Config:
     ARENA_DST_POINTS: tuple = ( #זה מוריד 5 נקודות 
         (0, 0),       # Top-Left
         (190, 0),     # Top-Right  
-        (190, 237),   # Bottom-Right
-        (89, 237),    # Bottom-Inner
-        (0, 148)      # Left-Inner
+        (190, -237),   # Bottom-Right
+        (89, -237),    # Bottom-Inner
+        (0, -148)      # Left-Inner
     )
     NUM_CALIBRATION_POINTS: int = 5  # Number of corners to click
     
@@ -101,10 +101,15 @@ class ArenaDetector:
         scale = self.config.ARENA_SCALE
         self.dst_points = np.array(self.config.ARENA_DST_POINTS, dtype='float32') * scale
         
-        # Calculate arena dimensions from destination points
+        # Calculate arena dimensions from destination points (handle negative coords)
+        min_x = min(pt[0] for pt in self.config.ARENA_DST_POINTS)
         max_x = max(pt[0] for pt in self.config.ARENA_DST_POINTS)
+        min_y = min(pt[1] for pt in self.config.ARENA_DST_POINTS)
         max_y = max(pt[1] for pt in self.config.ARENA_DST_POINTS)
-        self.arena_dimensions = (int(max_x * scale), int(max_y * scale))
+        
+        # Store bounds for proper drawing
+        self.arena_bounds = (min_x * scale, max_x * scale, min_y * scale, max_y * scale)
+        self.arena_dimensions = (int((max_x - min_x) * scale), int((max_y - min_y) * scale))
     
     def calibrate_with_points(self, src_points: List[Tuple[int, int]]) -> bool:
         """
@@ -760,66 +765,60 @@ class ArenaTrackerSystem:
         arena_status = "CALIBRATED" if self.arena_detector.is_calibrated else "NOT CALIBRATED"
         arena_color = (0, 255, 0) if self.arena_detector.is_calibrated else (0, 0, 255)
         cv2.putText(panel, f"Arena: {arena_status}", (10, y_offset),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, arena_color, 1)
-        y_offset += 25
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, arena_color, 1)
+        y_offset += 18
         
         # Tracking status
         if not self.robot_tracker.is_tracking:
             progress = self.robot_tracker.get_warmup_progress()
             cv2.putText(panel, f"Warmup: {int(progress * 100)}%", (10, y_offset),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
         else:
             track_status = "TRACKING" if self.robot_tracker.current_position else "SEARCHING"
             track_color = (0, 255, 0) if self.robot_tracker.current_position else (255, 165, 0)
             cv2.putText(panel, f"Robot: {track_status}", (10, y_offset),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, track_color, 1)
-        y_offset += 25
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, track_color, 1)
+        y_offset += 18
         
         # Bluetooth status
         bt_status = "CONNECTED" if self.nxt_comm.is_connected else "DISCONNECTED"
         bt_color = (0, 255, 0) if self.nxt_comm.is_connected else (0, 0, 255)
         cv2.putText(panel, f"Bluetooth: {bt_status}", (10, y_offset),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, bt_color, 1)
-        y_offset += 25
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, bt_color, 1)
+        y_offset += 18
         
         # Path points count
         path_count = len(self.robot_tracker.trajectory_points)
         cv2.putText(panel, f"Path points: {path_count}", (10, y_offset),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y_offset += 25
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        y_offset += 18
         
         # Current position (if available)
         if self.robot_tracker.current_position_flat:
             pos = self.robot_tracker.current_position_flat
-            cv2.putText(panel, f"Position: ({pos[0]}, {pos[1]})", (10, y_offset),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y_offset += 35
+            cv2.putText(panel, f"Pos: ({pos[0]}, {pos[1]})", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        y_offset += 20
         
         # Separator line
         cv2.line(panel, (10, y_offset), (self.panel_width - 10, y_offset), (100, 100, 100), 1)
-        y_offset += 10
+        y_offset += 5
         
         # 2D Map section
-        cv2.putText(panel, "2D Map View", (10, y_offset + 15),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        y_offset += 25
+        cv2.putText(panel, "2D Map View", (10, y_offset + 12),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        y_offset += 18
         
-        # Draw 2D map in the panel
-        map_size = min(self.panel_width - 20, height - y_offset - 80)
-        if map_size > 50:
+        # Draw 2D map in the panel - use remaining space minus controls
+        map_size = min(self.panel_width - 20, height - y_offset - 55)
+        if map_size > 30:
             map_view = self.draw_2d_map((map_size, map_size))
             panel[y_offset:y_offset + map_size, 10:10 + map_size] = map_view
-            y_offset += map_size + 10
+            y_offset += map_size + 5
         
-        # Instructions at bottom
-        cv2.putText(panel, "Controls:", (10, height - 70),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
-        cv2.putText(panel, "'c' - Recalibrate arena", (10, height - 50),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        cv2.putText(panel, "'r' - Reset tracking", (10, height - 35),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-        cv2.putText(panel, "'b' - Reconnect BT  ESC - Quit & Plot", (10, height - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        # Instructions at bottom (more compact)
+        cv2.putText(panel, "c:Recalib  r:Reset  b:BT  ESC:Quit", (10, height - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
         
         return panel
     
@@ -832,43 +831,54 @@ class ArenaTrackerSystem:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
             return map_img
         
-        # Scale factor to fit arena in map view
+        # Scale factor to fit arena in map view (handle negative coords)
         arena_w, arena_h = self.arena_detector.arena_dimensions
+        min_x, max_x, min_y, max_y = self.arena_detector.arena_bounds
+        
+        # Avoid division by zero
+        if arena_w == 0 or arena_h == 0:
+            cv2.putText(map_img, "Invalid arena size", (10, size[1]//2),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+            return map_img
+        
         scale = min((size[0] - 40) / arena_w, (size[1] - 40) / arena_h)
-        offset_x, offset_y = 20, 20
+        margin = 20
+        
+        # Helper function to transform coordinates to screen space
+        # Flip Y so that real-world top (y=0) appears at screen top
+        def to_screen(pt):
+            x = int((pt[0] - min_x) * scale + margin)
+            y = int((max_y - pt[1]) * scale + margin)  # Flip Y axis
+            return (x, y)
         
         # Draw walls
         corners = self.arena_detector.corners_flat
         for i in range(len(corners)):
             p1 = corners[i]
             p2 = corners[(i + 1) % len(corners)]
-            pt1 = (int(p1[0] * scale + offset_x), int(p1[1] * scale + offset_y))
-            pt2 = (int(p2[0] * scale + offset_x), int(p2[1] * scale + offset_y))
+            pt1 = to_screen(p1)
+            pt2 = to_screen(p2)
             cv2.line(map_img, pt1, pt2, (0, 0, 255), 2)  # Red walls
         
         # Draw corners
         for i, pt in enumerate(corners):
-            x = int(pt[0] * scale + offset_x)
-            y = int(pt[1] * scale + offset_y)
-            cv2.circle(map_img, (x, y), 5, (255, 0, 255), -1)
+            screen_pt = to_screen(pt)
+            cv2.circle(map_img, screen_pt, 5, (255, 0, 255), -1)
         
         # Draw trajectory
         path_points = list(self.robot_tracker.trajectory_points_flat)
         if len(path_points) > 1:
             for i in range(1, len(path_points)):
-                p1 = path_points[i-1]
-                p2 = path_points[i]
-                pt1 = (int(p1[0] * scale + offset_x), int(p1[1] * scale + offset_y))
-                pt2 = (int(p2[0] * scale + offset_x), int(p2[1] * scale + offset_y))
+                pt1 = to_screen(path_points[i-1])
+                pt2 = to_screen(path_points[i])
                 cv2.line(map_img, pt1, pt2, (255, 255, 0), 1)  # Yellow path
         
         # Draw current robot position
         if self.robot_tracker.current_position_flat:
             pos = self.robot_tracker.current_position_flat
-            x = int(pos[0] * scale + offset_x)
-            y = int(pos[1] * scale + offset_y)
-            cv2.circle(map_img, (x, y), 8, (0, 255, 0), -1)
-            cv2.circle(map_img, (x, y), 10, (255, 255, 255), 2)
+            screen_pos = to_screen(pos)
+            cv2.circle(map_img, screen_pos, 8, (0, 255, 0), -1)
+            cv2.circle(map_img, screen_pos, 10, (255, 255, 255), 2)
         
         return map_img
     
@@ -887,6 +897,7 @@ class ArenaTrackerSystem:
         
         if self.arena_detector.is_calibrated:
             corners = self.arena_detector.corners_flat
+            min_x, max_x, min_y, max_y = self.arena_detector.arena_bounds
             
             # Draw walls (connect corners)
             for i in range(len(corners)):
@@ -904,10 +915,9 @@ class ArenaTrackerSystem:
                 ax1.annotate(f'C{i+1}', (cx, cy), textcoords="offset points", 
                             xytext=(5, 5), fontsize=10, color='purple')
             
-            # Set axis properties
-            arena_w, arena_h = self.arena_detector.arena_dimensions
-            ax1.set_xlim(-50, arena_w + 50)
-            ax1.set_ylim(-50, arena_h + 50)
+            # Set axis properties using actual bounds
+            ax1.set_xlim(min_x - 50, max_x + 50)
+            ax1.set_ylim(min_y - 50, max_y + 50)
         else:
             ax1.text(0.5, 0.5, 'Arena not calibrated', ha='center', va='center',
                     transform=ax1.transAxes, fontsize=12, color='gray')
@@ -928,6 +938,7 @@ class ArenaTrackerSystem:
         if self.arena_detector.is_calibrated:
             # Draw arena walls (lighter, as background)
             corners = self.arena_detector.corners_flat
+            min_x, max_x, min_y, max_y = self.arena_detector.arena_bounds
             for i in range(len(corners)):
                 p1 = corners[i]
                 p2 = corners[(i + 1) % len(corners)]
@@ -949,18 +960,17 @@ class ArenaTrackerSystem:
             ax2.scatter(traj_arr[-1, 0], traj_arr[-1, 1], c='red', s=150, 
                        marker='s', zorder=5, label='End', edgecolors='white', linewidths=2)
             
-            # Set axis limits based on trajectory and arena
+            # Set axis limits based on actual arena bounds
             if self.arena_detector.is_calibrated:
-                arena_w, arena_h = self.arena_detector.arena_dimensions
-                ax2.set_xlim(-50, arena_w + 50)
-                ax2.set_ylim(-50, arena_h + 50)
+                ax2.set_xlim(min_x - 50, max_x + 50)
+                ax2.set_ylim(min_y - 50, max_y + 50)
         else:
             ax2.text(0.5, 0.5, 'No trajectory recorded', ha='center', va='center',
                     transform=ax2.transAxes, fontsize=12, color='gray')
         
         ax2.set_xlabel('X (pixels)')
         ax2.set_ylabel('Y (pixels)')
-        ax2.invert_yaxis()  # Match image coordinates
+        #ax2.invert_yaxis()  # Match image coordinates
         ax2.set_aspect('equal')
         ax2.grid(True, alpha=0.3)
         ax2.legend(loc='upper right')

@@ -38,6 +38,7 @@ class Config:
     CAMERA_INDEX: int = 1  # 0, 1, or 2 (phone link via DroidCam is usually 2)
     CAMERA_BACKEND: int = cv2.CAP_MSMF  # CAP_DSHOW or CAP_MSMF
     DISPLAY_SCALE: float = 0.7  # Scale factor for display
+    VIDEO_FILE: Optional[str] = "txt_files/video.mp4"  # Path to .mp4 file for testing (None = use camera)
     
     # Arena Calibration Settings (Manual Corner Selection)
     # These are the REAL WORLD dimensions of your arena in cm
@@ -245,8 +246,9 @@ class RobotTracker:
             dist2Threshold=config.BG_THRESHOLD,
             detectShadows=True
         )
-        self.trajectory_points = deque(maxlen=config.MAX_TRAJECTORY_POINTS)
-        self.trajectory_points_flat = deque(maxlen=config.MAX_TRAJECTORY_POINTS)
+        # Use lists instead of limited deques to store full trajectory
+        self.trajectory_points = []
+        self.trajectory_points_flat = []
         self.frame_count = 0
         self.current_position = None
         self.current_position_flat = None
@@ -325,6 +327,37 @@ class RobotTracker:
     def get_warmup_progress(self) -> float:
         """Returns warmup progress (0.0 to 1.0)"""
         return min(1.0, self.frame_count / self.config.WARMUP_FRAMES)
+    
+    def save_trajectory(self, filepath: str, arena_scale: int) -> bool:
+        """
+        Saves the trajectory to a text file.
+        Points are saved relative to arena coordinates (in cm).
+        Format: x_cm,y_cm per line
+        """
+        if not self.trajectory_points_flat:
+            print("⚠️ No trajectory points to save")
+            return False
+        
+        try:
+            with open(filepath, 'w') as f:
+                # Write header with metadata
+                f.write(f"# Robot Trajectory - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# Points: {len(self.trajectory_points_flat)}\n")
+                f.write(f"# Format: x_cm,y_cm (relative to arena origin)\n")
+                f.write(f"# Arena scale: {arena_scale} pixels per cm\n")
+                f.write("#\n")
+                
+                # Write each point converted back to cm
+                for pt in self.trajectory_points_flat:
+                    x_cm = pt[0] / arena_scale
+                    y_cm = pt[1] / arena_scale
+                    f.write(f"{x_cm:.2f},{y_cm:.2f}\n")
+            
+            print(f"✅ Trajectory saved to: {filepath}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to save trajectory: {e}")
+            return False
 
 # =============================================================================
 # NXT BLUETOOTH COMMUNICATOR CLASS
@@ -461,17 +494,33 @@ class ArenaTrackerSystem:
         
         # Panel width (used for mouse coordinate offset)
         self.panel_width = 320
+
+        # Video playback timing
+        self.frame_delay_ms = 1
         
     def initialize_camera(self) -> bool:
-        """Initializes the camera"""
-        print(f"📷 Opening camera {self.config.CAMERA_INDEX}...")
-        self.cap = cv2.VideoCapture(self.config.CAMERA_INDEX, self.config.CAMERA_BACKEND)
+        """Initializes the camera or video file"""
+        if self.config.VIDEO_FILE:
+            print(f"🎬 Opening video file: {self.config.VIDEO_FILE}")
+            self.cap = cv2.VideoCapture(self.config.VIDEO_FILE)
+
+            # Get video FPS and calculate frame delay
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            if fps > 0:
+                self.frame_delay_ms = int(1000 / fps)
+                print(f"   Video FPS: {fps:.1f}, frame delay: {self.frame_delay_ms}ms")
+            else:
+                self.frame_delay_ms = 33  # Default to ~30 FPS
+
+        else:
+            print(f"📷 Opening camera {self.config.CAMERA_INDEX}...")
+            self.cap = cv2.VideoCapture(self.config.CAMERA_INDEX, self.config.CAMERA_BACKEND)
         
         if not self.cap.isOpened():
-            print("❌ Could not open camera!")
+            print("❌ Could not open camera/video!")
             return False
         
-        print("✅ Camera opened successfully!")
+        print("✅ Camera/video opened successfully!")
         return True
     
     def initialize_bluetooth(self) -> bool:
@@ -1000,7 +1049,7 @@ class ArenaTrackerSystem:
             cv2.imshow("Arena Tracker System", combined)
             
             # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(self.frame_delay_ms) & 0xFF
             
             # ESC key - quit and show plots
             if key == 27:
@@ -1034,6 +1083,11 @@ class ArenaTrackerSystem:
                 filename = f"screenshot_{int(time.time())}.png"
                 cv2.imwrite(filename, frame)
                 print(f"💾 Screenshot saved: {filename}")
+        
+        # Save trajectory to file
+        if self.robot_tracker.trajectory_points_flat:
+            filename = f"txt_files/trajectory.txt"
+            self.robot_tracker.save_trajectory(filename, self.config.ARENA_SCALE)
         
         # Show final plots if ESC was pressed
         if self.show_plots_on_exit:

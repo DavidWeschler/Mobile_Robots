@@ -1,3 +1,12 @@
+# ==================================================================
+#
+# Students:
+#   - David Weschler       (209736578)
+#   - Guy Danin            (205372105)
+#   - Benjamin Rosin       (211426598)
+#
+# ==================================================================
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
@@ -8,8 +17,8 @@ import os
 # =============================================================================
 # FILE PATHS
 # =============================================================================
-CORNERS_FILE_PATH = "txt_files/clean_walls.TXT"
-ODOMETRY_TRACK_FILE = "txt_files/robot_path.TXT"  # Robot's odometry trajectory
+CORNERS_FILE_PATH = "txt_files/clean_walls.txt"
+ODOMETRY_TRACK_FILE = "txt_files/robot_path.txt"  # Robot's odometry trajectory
 CAMERA_TRACK_FILE = "txt_files/trajectory.txt"
 
 # Updated to 5 vertices to match measured data
@@ -164,6 +173,33 @@ def mean_absolute_error(a, b):
 def close_polygon(vertices):
     """Close a polygon by appending the first vertex at the end."""
     return np.vstack([vertices, vertices[0]])
+
+
+def annotate_edge_lengths(ax, vertices, lengths, color, label_prefix=''):
+    """
+    Annotate edge lengths on a polygon plot.
+    
+    Args:
+        ax: matplotlib axis
+        vertices: array of vertices
+        lengths: array of edge lengths
+        color: color for the text annotations
+        label_prefix: prefix for labels (e.g., 'M' for measured, 'T' for true)
+    """
+    n = len(vertices)
+    for i in range(n):
+        v1 = vertices[i]
+        v2 = vertices[(i + 1) % n]
+        
+        # Midpoint of edge
+        mid = (v1 + v2) / 2
+        
+        # Add length label
+        length_text = f'{lengths[i]:.1f}' if label_prefix else f'{lengths[i]:.1f}'
+        ax.text(mid[0], mid[1], length_text, fontsize=9, color=color, 
+                fontweight='bold', ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                         edgecolor=color, alpha=0.8, linewidth=1.5))
 
 
 def find_best_vertices_alignment(measured, true_ref):
@@ -422,6 +458,10 @@ ax2.fill(closed_measured[:, 0], closed_measured[:, 1], alpha=0.15, color=MEASURE
 ax2.plot(closed_true[:, 0], closed_true[:, 1], '-', color=TRUE_COLOR, linewidth=3, marker='o', markersize=10, label='True Arena')
 ax2.plot(closed_measured[:, 0], closed_measured[:, 1], '--', color=MEASURED_COLOR, linewidth=3, marker='s', markersize=9, label='Measured Arena (SLAM)')
 
+# Annotate edge lengths
+annotate_edge_lengths(ax2, true_vertices, true_lengths, TRUE_COLOR)
+annotate_edge_lengths(ax2, measured_vertices, measured_lengths, MEASURED_COLOR)
+
 # Add vertex labels for arenas
 for i, v in enumerate(true_vertices):
     ax2.annotate(f'T{i}', (v[0], v[1]), textcoords="offset points", xytext=(8, 8), fontsize=10, color=TRUE_COLOR, fontweight='bold')
@@ -470,6 +510,10 @@ ax_corners.fill(closed_true[:, 0], closed_true[:, 1], alpha=0.2, color=TRUE_COLO
 ax_corners.fill(closed_measured[:, 0], closed_measured[:, 1], alpha=0.2, color=MEASURED_COLOR)
 ax_corners.plot(closed_true[:, 0], closed_true[:, 1], '-', color=TRUE_COLOR, linewidth=2.5, marker='o', markersize=8, label='True Arena')
 ax_corners.plot(closed_measured[:, 0], closed_measured[:, 1], '--', color=MEASURED_COLOR, linewidth=2.5, marker='s', markersize=7, label='Measured (SLAM)')
+
+# Annotate edge lengths
+annotate_edge_lengths(ax_corners, true_vertices, true_lengths, TRUE_COLOR)
+annotate_edge_lengths(ax_corners, measured_vertices, measured_lengths, MEASURED_COLOR)
 
 # Add vertex labels
 for i, v in enumerate(true_vertices):

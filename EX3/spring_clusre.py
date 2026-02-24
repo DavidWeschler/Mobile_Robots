@@ -1,3 +1,12 @@
+# ==================================================================
+#
+# Students:
+#   - David Weschler       (209736578)
+#   - Guy Danin            (205372105)
+#   - Benjamin Rosin       (211426598)
+#
+# ==================================================================
+
 from math import dist
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +22,7 @@ def parse_robot_log(filename):
     x = data[:, 0] / 10000.0
     y = data[:, 1] / 10000.0
     
-    # --- FIX: Treat input as Radians directly ---
+    # --- Treat input as Radians directly ---
     # (Assuming the robot logged Radians * 100,000)
     theta_rad = data[:, 2] / 100000.0  
     
@@ -285,7 +294,7 @@ def save_results(path_x, path_y, walls):
     
     # 1. Save Robot Path
     # Format: X, Y
-    np.savetxt('EX3/robot_path.txt', np.column_stack((path_x, path_y)), 
+    np.savetxt('EX3/txt_files/robot_path.txt', np.column_stack((path_x, path_y)), 
                fmt='%.4f', header='X_cm,Y_cm', comments='', delimiter=',')
     print(" -> robot_path.txt saved.")
 
@@ -299,7 +308,7 @@ def save_results(path_x, path_y, walls):
         wall_data.append([start[0], start[1], end[0], end[1], length])
         
     if len(wall_data) > 0:
-        np.savetxt('EX3/clean_walls.txt', np.array(wall_data), 
+        np.savetxt('EX3/txt_files/clean_walls.txt', np.array(wall_data), 
                    fmt='%.4f', header='X_Start,Y_Start,X_End,Y_End,Length_cm', comments='', delimiter=',')
         print(" -> clean_walls.txt saved.")
     else:
@@ -308,7 +317,7 @@ def save_results(path_x, path_y, walls):
 # ==========================================
 # 6. Execution & Plotting
 # ==========================================
-f2 = r'C:\Users\isrgd\robots\Mobile_Robots\EX3\TRACK_LOG_de_best.TXT'
+f2 = r'EX3\TRACK_LOG_de_best.TXT'
 # f4 = r'C:\Users\isrgd\robots\Mobile_Robots\EX3\TRACK_LOG_18_M.TXT'
 
 # 1. Load Data

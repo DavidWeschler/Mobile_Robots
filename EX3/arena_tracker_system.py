@@ -13,7 +13,11 @@ The system:
 - Sends arena data and trajectory to the robot periodically
 - Displays everything on screen with visualization
 
-Author: Combined from multiple EX3 scripts
+Students:
+  - David Weschler       (209736578)
+  - Guy Danin            (205372105)
+  - Benjamin Rosin       (211426598)
+
 """
 
 import cv2
@@ -35,17 +39,17 @@ from typing import Optional, List, Tuple
 class Config:
     """All configuration settings in one place"""
     # Camera Settings
-    CAMERA_INDEX: int = 1  # 0, 1, or 2 (phone link via DroidCam is usually 2)
+    CAMERA_INDEX: int = 2  # 0, 1, or 2 (phone link via DroidCam is usually 2)
     CAMERA_BACKEND: int = cv2.CAP_MSMF  # CAP_DSHOW or CAP_MSMF
     DISPLAY_SCALE: float = 0.7  # Scale factor for display
-    VIDEO_FILE: Optional[str] = "txt_files/video.mp4"  # Path to .mp4 file for testing (None = use camera)
+    VIDEO_FILE: Optional[str] = None  # Path to .mp4 file for testing (None = use camera)
     
     # Arena Calibration Settings (Manual Corner Selection)
     # These are the REAL WORLD dimensions of your arena in cm
     # The user-clicked corners will be mapped to these coordinaetes
     ARENA_SCALE: int = 5  # 1 cm = 5 pixels in the 2D map
     # Destination points for homography (arena corners in real-world cm)
-    ARENA_DST_POINTS: tuple = ( #זה מוריד 5 נקודות 
+    ARENA_DST_POINTS: tuple = (
         (0, 0),       # Top-Left
         (190, 0),     # Top-Right  
         (190, -237),   # Bottom-Right
@@ -1096,7 +1100,7 @@ class ArenaTrackerSystem:
         
         # Save trajectory to file
         if self.robot_tracker.trajectory_points_flat:
-            filename = f"txt_files/trajectory.txt"
+            filename = f"Ex3/txt_files/trajectory.txt"
             self.robot_tracker.save_trajectory(filename, self.config.ARENA_SCALE)
         
         # Show final plots if ESC was pressed
